@@ -1,0 +1,68 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ex-shop-db
+    environment:
+      POSTGRES_DB: ex_shop
+      POSTGRES_USER: ex_shop_user
+      POSTGRES_PASSWORD: ex_shop_pass
+    ports:
+      - "${DB_PORT_EXTERNAL:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ex_shop_user -d ex_shop"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: ex-shop-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  server:
+    build: ./server
+    container_name: ex-shop-server
+    env_file: ./server/.env.docker
+    ports:
+      - "4000:4000"
+    volumes:
+      - uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  client:
+    build: ./client
+    container_name: ex-shop-client
+    ports:
+      - "80:80"
+    depends_on:
+      - server
+    restart: unless-stopped
+
+  ngrok:
+    image: ngrok/ngrok:alpine
+    container_name: ex-shop-ngrok
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:-356xwDV11OWRrDqaIE7AcUKaWWe_7KJrqZA4ZPZkaXPDYRiSH}
+    command: http server:4000 --log stdout
+    ports:
+      - "4040:4040"
+    depends_on:
+      - server
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  uploads:
