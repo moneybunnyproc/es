@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { Telegraf, Markup } from 'telegraf';
 import { User, Shop, Category, Product, ProductItem, ChatMessage, PaymentSystem, BotConfig } from '../models/index.js';
 import sequelize from '../config/database.js';
