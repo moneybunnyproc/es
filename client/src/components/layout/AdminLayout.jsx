@@ -87,12 +87,6 @@ export default function AdminLayout() {
         {/* Bottom */}
         <div className="px-3 py-4 border-t border-outline-variant/20 flex flex-col gap-2">
           <Link
-            to="/admin/products"
-            className="btn-primary w-full text-center text-sm py-2.5"
-          >
-            + Новый товар
-          </Link>
-          <Link
             to="/admin/settings"
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors"
           >
