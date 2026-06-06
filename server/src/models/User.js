@@ -38,6 +38,10 @@ const User = sequelize.define('User', {
     type: DataTypes.BOOLEAN,
     defaultValue: false,
   },
+  isShadowBanned: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+  },
   telegramId: {
     type: DataTypes.BIGINT,
     allowNull: true,

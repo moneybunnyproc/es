@@ -73,6 +73,7 @@ export default function AdminUserDetailPage() {
                 <span className={`badge ${user.isBanned ? 'badge-danger' : 'badge-success'} text-xs`}>
                   {user.isBanned ? 'Заблокирован' : 'Активен'}
                 </span>
+                {user.isShadowBanned && <span className="badge badge-warning text-xs">Shadow Ban</span>}
               </div>
             </div>
 
@@ -121,6 +122,14 @@ export default function AdminUserDetailPage() {
                   {user.isBanned ? 'Разбанить' : 'Забанить'}
                 </button>
               </div>
+              <button
+                className={`text-xs px-3 py-1.5 rounded-lg w-full transition-colors ${
+                  user.isShadowBanned ? 'bg-warning/20 text-warning' : 'bg-surface-container text-on-surface-variant hover:bg-surface-container-high'
+                }`}
+                onClick={() => handleUpdate({ isShadowBanned: !user.isShadowBanned })}
+              >
+                {user.isShadowBanned ? 'Снять Shadow Ban' : 'Shadow Ban'}
+              </button>
             </div>
           </div>
 

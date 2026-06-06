@@ -97,9 +97,12 @@ export default function AdminUsersPage() {
                   <td className="px-6 py-3 text-on-surface font-medium">{parseFloat(u.balance).toFixed(2)} ₽</td>
                   <td className="px-6 py-3 text-on-surface-variant">{u.personalDiscount}%</td>
                   <td className="px-6 py-3">
-                    <span className={`badge ${u.isBanned ? 'badge-danger' : 'badge-success'}`}>
-                      {u.isBanned ? 'Бан' : 'Активен'}
-                    </span>
+                    <div className="flex gap-1">
+                      <span className={`badge ${u.isBanned ? 'badge-danger' : 'badge-success'}`}>
+                        {u.isBanned ? 'Бан' : 'Активен'}
+                      </span>
+                      {u.isShadowBanned && <span className="badge badge-warning">SB</span>}
+                    </div>
                   </td>
                   <td className="px-6 py-3">
                     <div className="flex items-center gap-2">

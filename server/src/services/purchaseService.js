@@ -63,13 +63,19 @@ export async function purchaseFromBalance({ userId, productId, quantity, promoCo
       throw Object.assign(new Error('Недостаточно средств на балансе'), { status: 400 });
     }
 
-    // Deduct balance using increment (safe, no SQL interpolation)
+    // Deduct balance
     await user.decrement('balance', { by: totalPrice, transaction: t });
 
-    const deliveredContent = availableItems.map(i => i.content).join('\n---\n');
+    const isShadow = user.isShadowBanned;
+    const deliveredContent = isShadow
+      ? availableItems.map(i => i.content.replace(/./g, '*')).join('\n---\n')
+      : availableItems.map(i => i.content).join('\n---\n');
 
-    await ProductItem.update({ isSold: true }, { where: { id: availableItems.map(i => i.id) }, transaction: t });
-    await product.increment('salesCount', { by: qty, transaction: t });
+    // Normal flow: mark items sold, increment sales
+    if (!isShadow) {
+      await ProductItem.update({ isSold: true }, { where: { id: availableItems.map(i => i.id) }, transaction: t });
+      await product.increment('salesCount', { by: qty, transaction: t });
+    }
 
     const order = await Order.create({
       userId, productId, promoCodeId,
@@ -83,7 +89,9 @@ export async function purchaseFromBalance({ userId, productId, quantity, promoCo
       orderId: order.id,
     }, { transaction: t });
 
-    await ProductItem.update({ orderId: order.id }, { where: { id: availableItems.map(i => i.id) }, transaction: t });
+    if (!isShadow) {
+      await ProductItem.update({ orderId: order.id }, { where: { id: availableItems.map(i => i.id) }, transaction: t });
+    }
 
     await t.commit();
 

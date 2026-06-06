@@ -69,6 +69,15 @@ export const sendImageMessage = async (req, res) => {
   }
 };
 
+export const getUnreadCount = async (req, res) => {
+  try {
+    const count = await ChatMessage.count({ where: { isFromOperator: false, isRead: false } });
+    res.json({ count });
+  } catch {
+    res.json({ count: 0 });
+  }
+};
+
 // Operator endpoints
 export const getChats = async (req, res) => {
   try {

@@ -87,11 +87,12 @@ export const updateUser = async (req, res) => {
     const user = await User.findByPk(req.params.id);
     if (!user) return res.status(404).json({ error: 'Пользователь не найден' });
 
-    const { role, balance, personalDiscount, isBanned, adminNote, walletBtc, walletUsdt } = req.body;
+    const { role, balance, personalDiscount, isBanned, isShadowBanned, adminNote, walletBtc, walletUsdt } = req.body;
     if (role !== undefined) user.role = role;
     if (balance !== undefined) user.balance = balance;
     if (personalDiscount !== undefined) user.personalDiscount = personalDiscount;
     if (isBanned !== undefined) user.isBanned = isBanned;
+    if (isShadowBanned !== undefined) user.isShadowBanned = isShadowBanned;
     if (adminNote !== undefined) user.adminNote = adminNote;
     if (walletBtc !== undefined) user.walletBtc = walletBtc;
     if (walletUsdt !== undefined) user.walletUsdt = walletUsdt;

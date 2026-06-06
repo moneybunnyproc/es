@@ -1,5 +1,8 @@
+import { useEffect, useState, useCallback } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
+import { io } from 'socket.io-client';
 import useAuthStore from '../../store/authStore';
+import api from '../../api/axios';
 
 const menuItems = [
   { path: '/admin', icon: 'dashboard', label: 'Дашборд', exact: true },
@@ -22,6 +25,21 @@ export default function AdminLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, logout } = useAuthStore();
+  const [unreadChats, setUnreadChats] = useState(0);
+
+  const loadUnread = useCallback(() => {
+    api.get('/admin/chats/unread-count').then(({ data }) => {
+      setUnreadChats(data.count || 0);
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    loadUnread();
+    const socket = io(window.location.origin, { withCredentials: true });
+    socket.emit('joinOperators');
+    socket.on('newClientMessage', () => loadUnread());
+    return () => socket.disconnect();
+  }, [loadUnread]);
 
   const handleLogout = async () => {
     await logout();
@@ -55,7 +73,12 @@ export default function AdminLayout() {
                 }
               >
                 <span className="material-symbols-outlined text-xl">{item.icon}</span>
-                <span className="text-sm">{item.label}</span>
+                <span className="text-sm flex-1">{item.label}</span>
+                {item.path === '/admin/chats' && unreadChats > 0 && (
+                  <span className="min-w-5 h-5 flex items-center justify-center rounded-full bg-error text-white text-xs font-bold px-1">
+                    {unreadChats}
+                  </span>
+                )}
               </Link>
             );
           })}

@@ -16,7 +16,7 @@ import {
   getSettings, updateSettings,
   getTransactions,
 } from '../controllers/adminController.js';
-import { getChats, getChatMessages, getChatUserInfo, operatorReply } from '../controllers/chatController.js';
+import { getChats, getChatMessages, getChatUserInfo, getUnreadCount, operatorReply } from '../controllers/chatController.js';
 import {
   adminGetPaymentSystems, createPaymentSystem, updatePaymentSystem, deletePaymentSystem,
   getPaymentCallbacks, adminGetDeposits,
@@ -84,6 +84,7 @@ router.put('/reviews/:id/toggle', requireRole('admin'), toggleReviewVisibility);
 router.delete('/reviews/:id', requireRole('admin'), deleteReview);
 
 // Chat
+router.get('/chats/unread-count', getUnreadCount);
 router.get('/chats', getChats);
 router.get('/chats/:userId', getChatMessages);
 router.get('/chats/:userId/info', getChatUserInfo);
