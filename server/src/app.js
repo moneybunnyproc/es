@@ -17,6 +17,7 @@ import chatRoutes from './routes/chat.js';
 import adminRoutes from './routes/admin.js';
 import paymentRoutes from './routes/payments.js';
 import { startBotFromDB } from './bot/index.js';
+import { pollCryptoDeposits } from './services/cryptoService.js';
 
 dotenv.config();
 
@@ -100,6 +101,9 @@ const start = async () => {
     httpServer.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
       startBotFromDB();
+
+      // Poll crypto deposits every 60 seconds
+      setInterval(() => pollCryptoDeposits().catch(console.error), 60000);
     });
   } catch (err) {
     console.error('Failed to start:', err);

@@ -11,6 +11,12 @@ const defaultSettings = [
   { key: 'rules_text', label: 'Правила магазина', type: 'textarea' },
 ];
 
+const cryptoSettings = [
+  { currency: 'BTC', addressKey: 'crypto_btc_address', confirmKey: 'crypto_btc_confirmations', placeholder: 'bc1q...' },
+  { currency: 'LTC', addressKey: 'crypto_ltc_address', confirmKey: 'crypto_ltc_confirmations', placeholder: 'ltc1q...' },
+  { currency: 'USDT (TRC-20)', addressKey: 'crypto_usdt_address', confirmKey: 'crypto_usdt_confirmations', placeholder: 'T...' },
+];
+
 export default function AdminSettingsPage() {
   const [settings, setSettings] = useState({});
   const [loading, setLoading] = useState(true);
@@ -66,6 +72,39 @@ export default function AdminSettingsPage() {
         <div className="pt-2">
           <button className="btn-primary px-6 py-2 rounded-lg text-sm" onClick={handleSave}>
             Сохранить настройки
+          </button>
+        </div>
+      </div>
+
+      {/* Crypto wallets */}
+      <div className="glass-card-static p-6 space-y-5">
+        <h2 className="text-lg font-bold text-on-surface">Крипто-кошельки</h2>
+        {cryptoSettings.map(({ currency, addressKey, confirmKey, placeholder }) => (
+          <div key={addressKey} className="grid grid-cols-[1fr_120px] gap-3 items-end">
+            <div>
+              <label className={labelCls}>{currency} кошелёк</label>
+              <input
+                className={`${inputCls} font-mono`}
+                value={settings[addressKey] || ''}
+                onChange={(e) => setSettings({ ...settings, [addressKey]: e.target.value })}
+                placeholder={placeholder}
+              />
+            </div>
+            <div>
+              <label className={labelCls}>Подтверждения</label>
+              <input
+                className={inputCls}
+                type="number"
+                min="0"
+                value={settings[confirmKey] || '0'}
+                onChange={(e) => setSettings({ ...settings, [confirmKey]: e.target.value })}
+              />
+            </div>
+          </div>
+        ))}
+        <div className="pt-2">
+          <button className="btn-primary px-6 py-2 rounded-lg text-sm" onClick={handleSave}>
+            Сохранить
           </button>
         </div>
       </div>

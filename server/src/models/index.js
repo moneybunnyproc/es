@@ -15,6 +15,7 @@ import PaymentSystem from './PaymentSystem.js';
 import PaymentCallback from './PaymentCallback.js';
 import DepositOrder from './DepositOrder.js';
 import BotConfig from './BotConfig.js';
+import CryptoDeposit from './CryptoDeposit.js';
 
 // Shop -> Category -> Product
 Shop.hasMany(Category, { foreignKey: 'shopId', as: 'categories' });
@@ -67,6 +68,10 @@ User.hasMany(DepositOrder, { foreignKey: 'userId', as: 'deposits' });
 DepositOrder.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 DepositOrder.belongsTo(PaymentSystem, { foreignKey: 'paymentSystemId', as: 'paymentSystem' });
 
+// User -> Crypto Deposits
+User.hasMany(CryptoDeposit, { foreignKey: 'userId', as: 'cryptoDeposits' });
+CryptoDeposit.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+
 export {
   sequelize,
   User,
@@ -85,4 +90,5 @@ export {
   PaymentCallback,
   DepositOrder,
   BotConfig,
+  CryptoDeposit,
 };

@@ -1,5 +1,6 @@
-import { PaymentSystem, PaymentCallback, DepositOrder, User } from '../models/index.js';
+import { PaymentSystem, PaymentCallback, DepositOrder, CryptoDeposit, User } from '../models/index.js';
 import { createDepositOrder, creditDeposit, pollDepositStatus } from '../services/depositService.js';
+import { getAvailableCryptoChannels, createCryptoDeposit, checkSingleCryptoDeposit } from '../services/cryptoService.js';
 
 // ===== CLIENT: Create deposit =====
 export const createDeposit = async (req, res) => {
@@ -82,6 +83,53 @@ export const checkDepositStatus = async (req, res) => {
     res.json({ status: deposit.status, deposit });
   } catch (err) {
     res.status(500).json({ error: 'Ошибка проверки статуса' });
+  }
+};
+
+// ===== CRYPTO =====
+export const getCryptoChannels = async (req, res) => {
+  try {
+    const channels = await getAvailableCryptoChannels();
+    res.json(channels);
+  } catch (err) {
+    res.status(500).json({ error: 'Ошибка загрузки крипто-каналов' });
+  }
+};
+
+export const createCryptoDepositOrder = async (req, res) => {
+  try {
+    const { currency, amountRub } = req.body;
+    if (!currency || !amountRub || parseFloat(amountRub) <= 0) {
+      return res.status(400).json({ error: 'Укажите валюту и сумму' });
+    }
+    const result = await createCryptoDeposit({ userId: req.user.id, currency, amountRub: parseFloat(amountRub) });
+    res.status(201).json(result);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message || 'Ошибка' });
+  }
+};
+
+export const checkCryptoDepositStatus = async (req, res) => {
+  try {
+    const deposit = await CryptoDeposit.findOne({ where: { id: req.params.id, userId: req.user.id } });
+    if (!deposit) return res.status(404).json({ error: 'Не найден' });
+    const updated = await checkSingleCryptoDeposit(deposit.id);
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: 'Ошибка проверки' });
+  }
+};
+
+export const getMyCryptoDeposits = async (req, res) => {
+  try {
+    const deposits = await CryptoDeposit.findAll({
+      where: { userId: req.user.id },
+      order: [['createdAt', 'DESC']],
+      limit: 50,
+    });
+    res.json(deposits);
+  } catch (err) {
+    res.status(500).json({ error: 'Ошибка загрузки' });
   }
 };
 
