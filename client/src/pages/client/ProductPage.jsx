@@ -21,10 +21,14 @@ export default function ProductPage() {
   const [reviewText, setReviewText] = useState('');
   const [reviewRating, setReviewRating] = useState(5);
   const [ordering, setOrdering] = useState(false);
+  const [payMethod, setPayMethod] = useState('balance');
+  const [cryptoChannels, setCryptoChannels] = useState([]);
+  const [cryptoResult, setCryptoResult] = useState(null);
 
   useEffect(() => {
     fetchProduct(id);
     api.get(`/reviews/product/${id}`).then(r => setReviews(r.data)).catch(() => {});
+    api.get('/payments/crypto/channels').then(r => setCryptoChannels(r.data)).catch(() => {});
   }, [id, fetchProduct]);
 
   const handleCheckPromo = async () => {
@@ -42,13 +46,28 @@ export default function ProductPage() {
     if (!user) return toast.error('Войдите для покупки');
     setOrdering(true);
     try {
-      await createOrder(parseInt(id), quantity, promoCode || undefined, 'balance');
-      toast.success('Покупка успешна!');
-      setShowBuyModal(false);
-      fetchUser();
-      fetchProduct(id);
+      if (payMethod === 'balance') {
+        await createOrder(parseInt(id), quantity, promoCode || undefined, 'balance');
+        toast.success('Покупка успешна!');
+        setShowBuyModal(false);
+        fetchUser();
+        fetchProduct(id);
+      } else if (['btc', 'ltc', 'usdt'].includes(payMethod)) {
+        const total = calcTotal();
+        const { data } = await api.post('/payments/crypto/deposit', { currency: payMethod, amountRub: parseFloat(total) });
+        setCryptoResult(data);
+        toast.success('Крипто-платёж создан');
+      } else if (payMethod === 'fiat') {
+        const total = calcTotal();
+        const { data } = await api.post('/payments/deposit', { amount: parseFloat(total), channel: 'card' });
+        if (data.paymentUrl) {
+          window.open(data.paymentUrl, '_blank');
+        }
+        toast.success('Платёж создан. После оплаты баланс пополнится, и вы сможете купить товар.');
+        setShowBuyModal(false);
+      }
     } catch (err) {
-      toast.error(err.response?.data?.error || 'Ошибка покупки');
+      toast.error(err.response?.data?.error || 'Ошибка');
     } finally {
       setOrdering(false);
     }
@@ -263,26 +282,43 @@ export default function ProductPage() {
               <span className="text-primary-action text-2xl font-bold">{calcTotal()} ₽</span>
             </div>
 
-            {user && (
-              <p className="text-on-surface-variant text-sm">
-                Баланс: <span className="text-on-surface font-medium">{parseFloat(user.balance).toFixed(2)} ₽</span>
-              </p>
+            {/* Payment method */}
+            {!cryptoResult && (
+              <div className="space-y-2">
+                <label className="text-sm text-on-surface-variant">Способ оплаты</label>
+                <div className="grid grid-cols-1 gap-2">
+                  <PayOption selected={payMethod === 'balance'} onClick={() => setPayMethod('balance')}
+                    icon="account_balance_wallet"
+                    label={`С баланса (${parseFloat(user?.balance || 0).toFixed(2)} ₽)`} />
+                  {cryptoChannels.map(ch => (
+                    <PayOption key={ch.currency} selected={payMethod === ch.currency} onClick={() => setPayMethod(ch.currency)}
+                      icon="currency_bitcoin" label={ch.label} sub={`1 = ${ch.rate?.toLocaleString('ru')} ₽`} />
+                  ))}
+                  <PayOption selected={payMethod === 'fiat'} onClick={() => setPayMethod('fiat')}
+                    icon="credit_card" label="Карта / СБП" />
+                </div>
+              </div>
+            )}
+
+            {/* Crypto result */}
+            {cryptoResult && (
+              <div className="bg-surface/50 border border-outline-variant/10 rounded-xl p-4 space-y-2">
+                <p className="text-sm text-on-surface-variant">Переведите точно:</p>
+                <p className="text-xl font-bold text-primary-action font-mono">{cryptoResult.deposit.amountCrypto} {cryptoResult.deposit.currency.toUpperCase()}</p>
+                <p className="text-sm text-on-surface-variant">На кошелёк:</p>
+                <p className="text-sm font-mono text-on-surface break-all select-all bg-surface-container rounded-lg px-3 py-2">{cryptoResult.deposit.walletAddress}</p>
+                <p className="text-xs text-on-surface-variant">Курс: 1 {cryptoResult.deposit.currency.toUpperCase()} = {cryptoResult.rate?.toLocaleString('ru')} ₽ | Действует 1 час</p>
+                <p className="text-xs text-tertiary">После подтверждения баланс пополнится, и товар будет доступен для покупки.</p>
+              </div>
             )}
 
             <div className="flex gap-3 pt-2">
-              <button
-                onClick={() => setShowBuyModal(false)}
-                className="btn-ghost flex-1 py-3"
-              >
-                Отмена
-              </button>
-              <button
-                onClick={handleBuy}
-                disabled={ordering}
-                className="btn-primary flex-1 py-3 justify-center disabled:opacity-50"
-              >
-                {ordering ? 'Обработка...' : 'Оплатить с баланса'}
-              </button>
+              <button onClick={() => { setShowBuyModal(false); setCryptoResult(null); }} className="btn-ghost flex-1 py-3">Отмена</button>
+              {!cryptoResult && (
+                <button onClick={handleBuy} disabled={ordering} className="btn-primary flex-1 py-3 justify-center disabled:opacity-50">
+                  {ordering ? 'Обработка...' : payMethod === 'balance' ? 'Оплатить' : 'Продолжить'}
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -356,5 +392,21 @@ export default function ProductPage() {
         </div>
       </section>
     </div>
+  );
+}
+
+function PayOption({ selected, onClick, icon, label, sub }) {
+  return (
+    <button onClick={onClick}
+      className={`flex items-center gap-3 p-3 rounded-xl border transition-all text-left ${
+        selected ? 'border-primary-action bg-primary-action/10' : 'border-outline-variant/30 hover:border-primary/30'
+      }`}>
+      <span className="material-symbols-outlined text-xl text-primary">{icon}</span>
+      <div className="flex-1">
+        <p className="text-sm font-medium text-on-surface">{label}</p>
+        {sub && <p className="text-xs text-on-surface-variant">{sub}</p>}
+      </div>
+      {selected && <span className="material-symbols-outlined text-primary text-lg">check_circle</span>}
+    </button>
   );
 }

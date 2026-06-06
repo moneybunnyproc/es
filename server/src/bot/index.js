@@ -1,9 +1,10 @@
 import crypto from 'crypto';
 import { Telegraf, Markup } from 'telegraf';
-import { User, Shop, Category, Product, ProductItem, ChatMessage, PaymentSystem, BotConfig } from '../models/index.js';
+import { User, Shop, Category, Product, ProductItem, Order, ChatMessage, PaymentSystem, BotConfig } from '../models/index.js';
 import sequelize from '../config/database.js';
 import { purchaseFromBalance } from '../services/purchaseService.js';
 import { createDepositOrder } from '../services/depositService.js';
+import { getAvailableCryptoChannels, createCryptoDeposit } from '../services/cryptoService.js';
 
 let activeBot = null;
 let activeBotId = null;
@@ -91,6 +92,10 @@ export async function startBotWithConfig(config) {
 }
 
 // ===== All bot handlers =====
+async function getUser(ctx) {
+  return User.findOne({ where: { telegramId: ctx.from.id } });
+}
+
 function setupBotHandlers(bot, siteUrl) {
 
   // /start
@@ -116,8 +121,7 @@ function setupBotHandlers(bot, siteUrl) {
       await ctx.reply(`👋 С возвращением, ${user.username}!\nБаланс: <b>${parseFloat(user.balance).toFixed(2)} ₽</b>`, { parse_mode: 'HTML' });
     }
     await ctx.reply('Выберите действие:', Markup.keyboard([
-      ['🛍 Каталог', '💰 Баланс'],
-      ['📦 Мои заказы', '💳 Пополнить'],
+      ['🛍 Каталог', '📦 Мои заказы'],
       ['💬 Поддержка', '👤 Профиль'],
     ]).resize());
   });
@@ -180,9 +184,42 @@ function setupBotHandlers(bot, siteUrl) {
     ctx.answerCbQuery();
   });
 
-  // Покупка (uses shared purchaseService)
+  // Покупка — шаг 1: выбор способа оплаты
   bot.action(/^buy_(\d+)_(\d+)$/, async (ctx) => {
-    const user = await User.findOne({ where: { telegramId: ctx.from.id } });
+    const user = await getUser(ctx);
+    if (!user) return ctx.answerCbQuery('Нажмите /start');
+    const productId = ctx.match[1];
+    const qty = ctx.match[2];
+    const product = await Product.findByPk(productId);
+    if (!product) return ctx.answerCbQuery('Товар не найден');
+
+    const total = (parseFloat(product.price) * parseInt(qty)).toFixed(2);
+    const btns = [
+      [Markup.button.callback(`💰 С баланса (${parseFloat(user.balance).toFixed(2)} ₽)`, `pay_balance_${productId}_${qty}`)],
+    ];
+
+    // Add crypto options if configured
+    try {
+      const cryptoChannels = await getAvailableCryptoChannels();
+      const icons = { btc: '₿', ltc: 'Ł', usdt: '₮' };
+      for (const ch of cryptoChannels) {
+        btns.push([Markup.button.callback(`${icons[ch.currency] || '🪙'} ${ch.label}`, `pay_crypto_${ch.currency}_${productId}_${qty}`)]);
+      }
+    } catch {}
+
+    btns.push([Markup.button.callback('💳 Рубли (карта/СБП)', `pay_fiat_${productId}_${qty}`)]);
+    btns.push([Markup.button.callback('« Назад', `prod_${productId}`)]);
+
+    await ctx.editMessageText(
+      `🛒 <b>${product.name}</b> x${qty}\n💰 Сумма: <b>${total} ₽</b>\n\nВыберите способ оплаты:`,
+      { parse_mode: 'HTML', ...Markup.inlineKeyboard(btns) }
+    );
+    ctx.answerCbQuery();
+  });
+
+  // Покупка с баланса
+  bot.action(/^pay_balance_(\d+)_(\d+)$/, async (ctx) => {
+    const user = await getUser(ctx);
     if (!user) return ctx.answerCbQuery('Нажмите /start');
     try {
       const result = await purchaseFromBalance({
@@ -201,23 +238,72 @@ function setupBotHandlers(bot, siteUrl) {
     }
   });
 
-  // Баланс
-  bot.hears('💰 Баланс', async (ctx) => {
-    const user = await User.findOne({ where: { telegramId: ctx.from.id } });
-    if (!user) return ctx.reply('/start');
-    ctx.reply(`💰 Баланс: <b>${parseFloat(user.balance).toFixed(2)} ₽</b>`, { parse_mode: 'HTML' });
+  // Покупка за крипту — показываем кошелёк
+  bot.action(/^pay_crypto_(\w+)_(\d+)_(\d+)$/, async (ctx) => {
+    const user = await getUser(ctx);
+    if (!user) return ctx.answerCbQuery('Нажмите /start');
+    const currency = ctx.match[1];
+    const product = await Product.findByPk(ctx.match[2]);
+    if (!product) return ctx.answerCbQuery('Товар не найден');
+
+    const amountRub = parseFloat(product.price) * parseInt(ctx.match[3]);
+    try {
+      const { deposit, rate } = await createCryptoDeposit({ userId: user.id, currency, amountRub });
+      await ctx.reply(
+        `🪙 <b>Оплата ${currency.toUpperCase()}</b>\n\n` +
+        `Товар: ${product.name} x${ctx.match[3]}\n` +
+        `Сумма: <b>${amountRub} ₽</b>\n\n` +
+        `Переведите точно:\n<code>${deposit.amountCrypto}</code> ${currency.toUpperCase()}\n\n` +
+        `На кошелёк:\n<code>${deposit.walletAddress}</code>\n\n` +
+        `Курс: 1 ${currency.toUpperCase()} = ${rate.toLocaleString('ru')} ₽\n` +
+        `⏳ Действует 1 час\n\n` +
+        `После подтверждения транзакции товар будет отправлен автоматически.`,
+        { parse_mode: 'HTML' }
+      );
+    } catch (err) {
+      ctx.reply(`❌ ${err.message}`);
+    }
+    ctx.answerCbQuery();
   });
 
-  // Пополнение
-  bot.hears('💳 Пополнить', async (ctx) => {
+  // Покупка за рубли — создаём депозит на сумму товара
+  bot.action(/^pay_fiat_(\d+)_(\d+)$/, async (ctx) => {
+    const user = await getUser(ctx);
+    if (!user) return ctx.answerCbQuery('Нажмите /start');
+    const product = await Product.findByPk(ctx.match[1]);
+    if (!product) return ctx.answerCbQuery('Товар не найден');
+
+    const amount = parseFloat(product.price) * parseInt(ctx.match[2]);
+    try {
+      const result = await createDepositOrder({ userId: user.id, amount, httpFallbackUrl: siteUrl });
+
+      let text = `💳 <b>Оплата рублями</b>\n\nТовар: ${product.name} x${ctx.match[2]}\nСумма: <b>${amount} ₽</b>\n\n`;
+      if (result.requisite) {
+        if (result.requisite.bank) text += `🏦 ${result.requisite.bank}\n`;
+        if (result.requisite.number) text += `📱 <code>${result.requisite.number}</code>\n`;
+        if (result.requisite.holder) text += `👤 ${result.requisite.holder}\n`;
+      }
+      text += '\nПосле оплаты пополните баланс и купите товар, или баланс пополнится автоматически.';
+
+      const btns = result.paymentUrl ? [[Markup.button.url('🔗 Оплатить', result.paymentUrl)]] : [];
+      await ctx.reply(text, { parse_mode: 'HTML', ...Markup.inlineKeyboard(btns) });
+    } catch (err) {
+      ctx.reply(`❌ ${err.message}`);
+    }
+    ctx.answerCbQuery();
+  });
+
+  // Пополнение (вызывается из профиля)
+  bot.action('deposit_menu', async (ctx) => {
     await ctx.reply('Выберите сумму:', Markup.inlineKeyboard([
       [Markup.button.callback('500 ₽', 'dep_500'), Markup.button.callback('1000 ₽', 'dep_1000')],
       [Markup.button.callback('2000 ₽', 'dep_2000'), Markup.button.callback('5000 ₽', 'dep_5000')],
     ]));
+    ctx.answerCbQuery();
   });
 
   bot.action(/^dep_(\d+)$/, async (ctx) => {
-    const user = await User.findOne({ where: { telegramId: ctx.from.id } });
+    const user = await getUser(ctx);
     if (!user) return ctx.answerCbQuery('/start');
     const amount = parseInt(ctx.match[1]);
     try {
@@ -242,7 +328,7 @@ function setupBotHandlers(bot, siteUrl) {
 
   // Заказы
   bot.hears('📦 Мои заказы', async (ctx) => {
-    const user = await User.findOne({ where: { telegramId: ctx.from.id } });
+    const user = await getUser(ctx);
     if (!user) return ctx.reply('/start');
     const orders = await Order.findAll({ where: { userId: user.id }, include: [{ model: Product, as: 'product', attributes: ['name'] }], order: [['createdAt', 'DESC']], limit: 10 });
     if (!orders.length) return ctx.reply('📦 Нет заказов');
@@ -257,16 +343,24 @@ function setupBotHandlers(bot, siteUrl) {
 
   // Профиль
   bot.hears('👤 Профиль', async (ctx) => {
-    const user = await User.findOne({ where: { telegramId: ctx.from.id } });
+    const user = await getUser(ctx);
     if (!user) return ctx.reply('/start');
-    ctx.reply(`👤 <b>${user.username}</b>\n💰 ${parseFloat(user.balance).toFixed(2)} ₽\n${user.personalDiscount ? `🏷 Скидка: ${user.personalDiscount}%\n` : ''}`, { parse_mode: 'HTML' });
+    const ordersCount = await Order.count({ where: { userId: user.id } });
+    let text = `👤 <b>${user.username}</b>\n\n`;
+    text += `💰 Баланс: <b>${parseFloat(user.balance).toFixed(2)} ₽</b>\n`;
+    text += `📦 Заказов: ${ordersCount}\n`;
+    if (user.personalDiscount) text += `🏷 Скидка: ${user.personalDiscount}%\n`;
+    await ctx.reply(text, {
+      parse_mode: 'HTML',
+      ...Markup.inlineKeyboard([[Markup.button.callback('💳 Пополнить баланс', 'deposit_menu')]]),
+    });
   });
 
   // Любой текст → поддержка
   bot.on('text', async (ctx) => {
     if (ctx.message.text.startsWith('/')) return;
-    if (['🛍', '💰', '📦', '💳', '💬', '👤'].some(e => ctx.message.text.startsWith(e))) return;
-    const user = await User.findOne({ where: { telegramId: ctx.from.id } });
+    if (['🛍', '📦', '💬', '👤'].some(e => ctx.message.text.startsWith(e))) return;
+    const user = await getUser(ctx);
     if (!user) return;
     await ChatMessage.create({ userId: user.id, message: ctx.message.text, isFromOperator: false });
     ctx.reply('💬 Отправлено в поддержку.');
