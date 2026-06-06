@@ -1,10 +1,12 @@
+import { Op } from 'sequelize';
 import { BotConfig } from '../models/index.js';
-import { startBotWithConfig, stopBot, getBot } from '../bot/index.js';
+import { startBotWithConfig, stopBot } from '../bot/index.js';
+
+const VALID_TYPES = ['shop', 'redirector', 'client'];
 
 export const getBots = async (req, res) => {
   try {
     const bots = await BotConfig.findAll({ order: [['createdAt', 'DESC']] });
-    // Mask tokens
     const masked = bots.map(b => {
       const j = b.toJSON();
       j.tokenMasked = j.token ? j.token.slice(0, 6) + '••••••' + j.token.slice(-4) : '';
@@ -28,10 +30,13 @@ export const getBotFull = async (req, res) => {
 
 export const createBot = async (req, res) => {
   try {
-    const { name, token, welcomeMessage } = req.body;
+    const { name, token, welcomeMessage, types } = req.body;
     if (!name || !token) return res.status(400).json({ error: 'Имя и токен обязательны' });
 
-    const bot = await BotConfig.create({ name, token, welcomeMessage, isActive: false, status: 'stopped' });
+    const botTypes = Array.isArray(types) ? types.filter(t => VALID_TYPES.includes(t)) : ['shop'];
+    if (!botTypes.length) botTypes.push('shop');
+
+    const bot = await BotConfig.create({ name, token, welcomeMessage, types: botTypes, isActive: false, status: 'stopped' });
     res.status(201).json(bot);
   } catch (err) {
     res.status(500).json({ error: 'Ошибка создания' });
@@ -43,10 +48,13 @@ export const updateBot = async (req, res) => {
     const bot = await BotConfig.findByPk(req.params.id);
     if (!bot) return res.status(404).json({ error: 'Не найден' });
 
-    const { name, token, welcomeMessage } = req.body;
+    const { name, token, welcomeMessage, types } = req.body;
     if (name) bot.name = name;
     if (token) bot.token = token;
     if (welcomeMessage !== undefined) bot.welcomeMessage = welcomeMessage;
+    if (types) {
+      bot.types = Array.isArray(types) ? types.filter(t => VALID_TYPES.includes(t)) : bot.types;
+    }
     await bot.save();
 
     res.json(bot);
@@ -60,7 +68,7 @@ export const deleteBot = async (req, res) => {
     const bot = await BotConfig.findByPk(req.params.id);
     if (!bot) return res.status(404).json({ error: 'Не найден' });
 
-    if (bot.isActive) await stopBot();
+    if (bot.isActive) await stopBot(bot.id);
     await bot.destroy();
 
     res.json({ message: 'Удалён' });
@@ -71,11 +79,20 @@ export const deleteBot = async (req, res) => {
 
 export const startBotAction = async (req, res) => {
   try {
-    // Deactivate all other bots
-    await BotConfig.update({ isActive: false, status: 'stopped' }, { where: {} });
-
     const bot = await BotConfig.findByPk(req.params.id);
     if (!bot) return res.status(404).json({ error: 'Не найден' });
+
+    // For redirector: only one redirector at a time
+    if (bot.types.includes('redirector')) {
+      const others = await BotConfig.findAll({
+        where: { isActive: true, id: { [Op.ne]: bot.id } },
+      });
+      for (const other of others) {
+        if (other.types.includes('redirector')) {
+          await stopBot(other.id);
+        }
+      }
+    }
 
     bot.isActive = true;
     await bot.save();
@@ -93,13 +110,10 @@ export const startBotAction = async (req, res) => {
 
 export const stopBotAction = async (req, res) => {
   try {
-    await stopBot();
     const bot = await BotConfig.findByPk(req.params.id);
-    if (bot) {
-      bot.isActive = false;
-      bot.status = 'stopped';
-      await bot.save();
-    }
+    if (!bot) return res.status(404).json({ error: 'Не найден' });
+
+    await stopBot(bot.id);
     res.json({ message: 'Бот остановлен' });
   } catch (err) {
     res.status(500).json({ error: 'Ошибка остановки' });

@@ -1,15 +1,12 @@
-.PHONY: up down build restart logs dev dev-stop db-reset db-shell server-shell ngrok-url status clean help
+.PHONY: up down restart logs dev dev-stop db-reset db-shell server-shell ngrok-url status clean help
 
 # === Production (Docker) ===
 
-up: ## Start all services (including ngrok)
-	docker compose up -d
+up: ## Build and start all services
+	docker compose up -d --build
 
 down: ## Stop all services
 	docker compose down
-
-build: ## Build and start all
-	docker compose up -d --build
 
 restart: ## Restart all services
 	docker compose restart

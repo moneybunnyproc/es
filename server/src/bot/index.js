@@ -1,23 +1,27 @@
 import crypto from 'crypto';
 import { Telegraf, Markup } from 'telegraf';
-import { User, Shop, Category, Product, ProductItem, Order, ChatMessage, PaymentSystem, BotConfig } from '../models/index.js';
+import { User, Shop, Category, Product, ProductItem, Order, ChatMessage, BotConfig } from '../models/index.js';
 import sequelize from '../config/database.js';
 import { purchaseFromBalance } from '../services/purchaseService.js';
 import { createDepositOrder } from '../services/depositService.js';
 import { getAvailableCryptoChannels, createCryptoDeposit } from '../services/cryptoService.js';
 
-let activeBot = null;
-let activeBotId = null;
+// Map of active bots: botConfigId -> { bot, config }
+const activeBots = new Map();
 
-export function getBot() { return activeBot; }
+export function getBot() {
+  const first = activeBots.values().next().value;
+  return first?.bot || null;
+}
 
 // ===== Notifications =====
 export async function notifyUser(userId, text) {
-  if (!activeBot) return;
+  const bot = getBot();
+  if (!bot) return;
   try {
     const user = await User.findByPk(userId);
     if (user?.telegramId) {
-      await activeBot.telegram.sendMessage(user.telegramId, text, { parse_mode: 'HTML' });
+      await bot.telegram.sendMessage(user.telegramId, text, { parse_mode: 'HTML' });
     }
   } catch (err) {
     console.error('TG notify error:', err.message);
@@ -25,62 +29,69 @@ export async function notifyUser(userId, text) {
 }
 
 export async function notifyAdmins(text) {
-  if (!activeBot) return;
+  const bot = getBot();
+  if (!bot) return;
   try {
     const admins = await User.findAll({ where: { role: ['admin', 'operator'] } });
     for (const a of admins) {
-      if (a.telegramId) await activeBot.telegram.sendMessage(a.telegramId, text, { parse_mode: 'HTML' }).catch(() => {});
+      if (a.telegramId) await bot.telegram.sendMessage(a.telegramId, text, { parse_mode: 'HTML' }).catch(() => {});
     }
   } catch {}
 }
 
-// ===== Stop running bot =====
-export async function stopBot() {
-  if (activeBot) {
-    activeBot.stop('restart');
-    activeBot = null;
+// ===== Stop bot by config id =====
+export async function stopBot(configId) {
+  const entry = activeBots.get(configId);
+  if (entry) {
+    entry.bot.stop('restart');
+    activeBots.delete(configId);
   }
-  if (activeBotId) {
-    await BotConfig.update({ status: 'stopped' }, { where: { id: activeBotId } });
-    activeBotId = null;
-  }
+  await BotConfig.update({ status: 'stopped', isActive: false }, { where: { id: configId } });
 }
 
-// ===== Start bot from DB config =====
+// ===== Start all active bots from DB =====
 export async function startBotFromDB() {
-  const config = await BotConfig.findOne({ where: { isActive: true } });
-  if (!config) {
+  const configs = await BotConfig.findAll({ where: { isActive: true } });
+  if (!configs.length) {
     console.log('No active bot config found');
     return null;
   }
-  return startBotWithConfig(config);
+  for (const config of configs) {
+    await startBotWithConfig(config);
+  }
+  return getBot();
 }
 
 export async function startBotWithConfig(config) {
-  await stopBot();
+  if (activeBots.has(config.id)) {
+    activeBots.get(config.id).bot.stop('restart');
+    activeBots.delete(config.id);
+  }
 
   try {
     const bot = new Telegraf(config.token);
     const siteUrl = process.env.SITE_URL || 'http://localhost';
 
-    // Get bot info
     const me = await bot.telegram.getMe();
     config.username = me.username;
     config.status = 'running';
     config.lastError = null;
     await config.save();
 
-    setupBotHandlers(bot, siteUrl);
+    if (config.types.includes('redirector')) {
+      setupRedirectorHandlers(bot, siteUrl, config);
+    } else {
+      setupShopHandlers(bot, siteUrl);
+    }
 
     bot.launch().then(() => {
-      console.log(`Telegram bot @${me.username} started`);
+      console.log(`Telegram bot @${me.username} started (types: ${config.types.join(', ')})`);
     });
 
     process.once('SIGINT', () => bot.stop('SIGINT'));
     process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
-    activeBot = bot;
-    activeBotId = config.id;
+    activeBots.set(config.id, { bot, config });
     return bot;
   } catch (err) {
     config.status = 'error';
@@ -91,30 +102,154 @@ export async function startBotWithConfig(config) {
   }
 }
 
-// ===== All bot handlers =====
+// ===== Shared: find or create user =====
 async function getUser(ctx) {
   return User.findOne({ where: { telegramId: ctx.from.id } });
 }
 
-function setupBotHandlers(bot, siteUrl) {
+async function ensureUser(ctx) {
+  const tgId = ctx.from.id;
+  const tgUsername = ctx.from.username || '';
+  let user = await User.findOne({ where: { telegramId: tgId } });
 
-  // /start
+  if (!user) {
+    const username = tgUsername || `tg_${tgId}`;
+    const password = crypto.randomBytes(8).toString('hex');
+    try {
+      user = await User.create({ username, password, telegramId: tgId, telegramUsername: tgUsername });
+    } catch {
+      const uniq = `${username}_${crypto.randomBytes(3).toString('hex')}`;
+      user = await User.create({ username: uniq, password, telegramId: tgId, telegramUsername: tgUsername });
+    }
+    user._isNew = true;
+    user._password = password;
+  }
+  return user;
+}
+
+// ===== Shared: text -> support =====
+function setupSupportTextHandler(bot, menuEmojis) {
+  bot.on('text', async (ctx) => {
+    if (ctx.message.text.startsWith('/')) return;
+    if (menuEmojis.some(e => ctx.message.text.startsWith(e))) return;
+    const user = await getUser(ctx);
+    if (!user) return;
+    await ChatMessage.create({ userId: user.id, message: ctx.message.text, isFromOperator: false });
+    ctx.reply('💬 Отправлено в поддержку.');
+    notifyAdmins(`💬 <b>${user.username}</b>: ${ctx.message.text}`);
+  });
+}
+
+// ===== REDIRECTOR BOT HANDLERS =====
+function setupRedirectorHandlers(bot, siteUrl, botConfig) {
+
   bot.start(async (ctx) => {
-    const tgId = ctx.from.id;
-    const tgUsername = ctx.from.username || '';
-    let user = await User.findOne({ where: { telegramId: tgId } });
+    await ensureUser(ctx);
+    const welcome = botConfig.welcomeMessage || 'Добро пожаловать! Выберите действие:';
+    await ctx.reply(welcome, Markup.keyboard([
+      ['🛍 Магазины', '💬 Поддержка'],
+      ['🤖 Создать личного бота'],
+    ]).resize());
+  });
 
-    if (!user) {
-      const username = tgUsername || `tg_${tgId}`;
-      const password = crypto.randomBytes(8).toString('hex');
-      try {
-        user = await User.create({ username, password, telegramId: tgId, telegramUsername: tgUsername });
-      } catch {
-        const uniq = `${username}_${crypto.randomBytes(3).toString('hex')}`;
-        user = await User.create({ username: uniq, password, telegramId: tgId, telegramUsername: tgUsername });
+  bot.hears('🛍 Магазины', async (ctx) => {
+    const shopBots = await BotConfig.findAll({ where: { status: 'running' } });
+    const shops = shopBots.filter(b => b.types.includes('shop') || b.types.includes('client'));
+
+    if (!shops.length) return ctx.reply('Магазинов пока нет');
+
+    const btns = shops.map(s => {
+      if (s.username) return [Markup.button.url(s.name, `https://t.me/${s.username}`)];
+      return [Markup.button.callback(s.name, `noop_${s.id}`)];
+    });
+    await ctx.reply('Доступные магазины:', Markup.inlineKeyboard(btns));
+  });
+
+  bot.hears('💬 Поддержка', (ctx) => ctx.reply('Напишите сообщение — оно будет отправлено в поддержку.'));
+
+  bot.hears('🤖 Создать личного бота', async (ctx) => {
+    const user = await getUser(ctx);
+    if (!user) return ctx.reply('Нажмите /start для регистрации.');
+
+    const existing = await BotConfig.findOne({ where: { ownerTelegramId: ctx.from.id } });
+    if (existing) {
+      let text = `У вас уже есть бот: <b>${existing.name}</b>`;
+      if (existing.username) text += ` (@${existing.username})`;
+      text += `\nСтатус: ${existing.status}`;
+      return ctx.reply(text, { parse_mode: 'HTML' });
+    }
+
+    await ctx.reply(
+      '🤖 <b>Создание личного бота</b>\n\n' +
+      '1. Откройте @BotFather в Telegram\n' +
+      '2. Отправьте /newbot и следуйте инструкциям\n' +
+      '3. Скопируйте полученный токен\n' +
+      '4. Отправьте его сюда:\n\n' +
+      '<code>/newbot Название токен</code>',
+      { parse_mode: 'HTML' }
+    );
+  });
+
+  bot.command('newbot', async (ctx) => {
+    const user = await getUser(ctx);
+    if (!user) return ctx.reply('Нажмите /start для регистрации.');
+
+    const args = ctx.message.text.split(' ').slice(1);
+    if (args.length < 2) {
+      return ctx.reply('Использование: /newbot <название> <токен>');
+    }
+
+    const name = args[0];
+    const token = args.slice(1).join(' ').trim();
+
+    if (!/^\d+:[A-Za-z0-9_-]+$/.test(token)) {
+      return ctx.reply('❌ Неверный формат токена.');
+    }
+
+    const existing = await BotConfig.findOne({ where: { ownerTelegramId: ctx.from.id } });
+    if (existing) {
+      return ctx.reply('❌ У вас уже есть бот. Один пользователь — один бот.');
+    }
+
+    try {
+      const testBot = new Telegraf(token);
+      const me = await testBot.telegram.getMe();
+
+      const newConfig = await BotConfig.create({
+        name,
+        token,
+        username: me.username,
+        types: ['client'],
+        ownerTelegramId: ctx.from.id,
+        isActive: true,
+        status: 'stopped',
+      });
+
+      const started = await startBotWithConfig(newConfig);
+      if (started) {
+        await ctx.reply(
+          `✅ Бот <b>${name}</b> (@${me.username}) создан и запущен!\n\nhttps://t.me/${me.username}`,
+          { parse_mode: 'HTML' }
+        );
+      } else {
+        await ctx.reply(`⚠️ Бот создан, но не запустился: ${newConfig.lastError || 'неизвестная ошибка'}`);
       }
+    } catch (err) {
+      ctx.reply(`❌ ${err.message}`);
+    }
+  });
+
+  setupSupportTextHandler(bot, ['🛍', '💬', '🤖']);
+}
+
+// ===== SHOP / CLIENT BOT HANDLERS =====
+function setupShopHandlers(bot, siteUrl) {
+
+  bot.start(async (ctx) => {
+    const user = await ensureUser(ctx);
+    if (user._isNew) {
       await ctx.reply(
-        `🎉 Добро пожаловать в ExShop!\n\nЛогин: <code>${user.username}</code>\nПароль: <code>${password}</code>\n\nСайт: ${siteUrl}`,
+        `🎉 Добро пожаловать!\n\nЛогин: <code>${user.username}</code>\nПароль: <code>${user._password}</code>\n\nСайт: ${siteUrl}`,
         { parse_mode: 'HTML' }
       );
     } else {
@@ -126,7 +261,6 @@ function setupBotHandlers(bot, siteUrl) {
     ]).resize());
   });
 
-  // /link
   bot.command('link', async (ctx) => {
     const args = ctx.message.text.split(' ').slice(1);
     if (args.length < 2) return ctx.reply('Использование: /link <логин> <пароль>');
@@ -140,7 +274,6 @@ function setupBotHandlers(bot, siteUrl) {
     ctx.reply(`✅ Аккаунт ${user.username} привязан!`);
   });
 
-  // Каталог
   bot.hears('🛍 Каталог', async (ctx) => {
     const shops = await Shop.findAll({ where: { isActive: true }, order: [['sortOrder', 'ASC']] });
     if (!shops.length) return ctx.reply('Витрин пока нет');
@@ -184,7 +317,6 @@ function setupBotHandlers(bot, siteUrl) {
     ctx.answerCbQuery();
   });
 
-  // Покупка — шаг 1: выбор способа оплаты
   bot.action(/^buy_(\d+)_(\d+)$/, async (ctx) => {
     const user = await getUser(ctx);
     if (!user) return ctx.answerCbQuery('Нажмите /start');
@@ -198,7 +330,6 @@ function setupBotHandlers(bot, siteUrl) {
       [Markup.button.callback(`💰 С баланса (${parseFloat(user.balance).toFixed(2)} ₽)`, `pay_balance_${productId}_${qty}`)],
     ];
 
-    // Add crypto options if configured
     try {
       const cryptoChannels = await getAvailableCryptoChannels();
       const icons = { btc: '₿', ltc: 'Ł', usdt: '₮' };
@@ -217,7 +348,6 @@ function setupBotHandlers(bot, siteUrl) {
     ctx.answerCbQuery();
   });
 
-  // Покупка с баланса
   bot.action(/^pay_balance_(\d+)_(\d+)$/, async (ctx) => {
     const user = await getUser(ctx);
     if (!user) return ctx.answerCbQuery('Нажмите /start');
@@ -238,7 +368,6 @@ function setupBotHandlers(bot, siteUrl) {
     }
   });
 
-  // Покупка за крипту — показываем кошелёк
   bot.action(/^pay_crypto_(\w+)_(\d+)_(\d+)$/, async (ctx) => {
     const user = await getUser(ctx);
     if (!user) return ctx.answerCbQuery('Нажмите /start');
@@ -256,8 +385,7 @@ function setupBotHandlers(bot, siteUrl) {
         `Переведите точно:\n<code>${deposit.amountCrypto}</code> ${currency.toUpperCase()}\n\n` +
         `На кошелёк:\n<code>${deposit.walletAddress}</code>\n\n` +
         `Курс: 1 ${currency.toUpperCase()} = ${rate.toLocaleString('ru')} ₽\n` +
-        `⏳ Действует 1 час\n\n` +
-        `После подтверждения транзакции товар будет отправлен автоматически.`,
+        `⏳ Действует 1 час`,
         { parse_mode: 'HTML' }
       );
     } catch (err) {
@@ -266,7 +394,6 @@ function setupBotHandlers(bot, siteUrl) {
     ctx.answerCbQuery();
   });
 
-  // Покупка за рубли — создаём депозит на сумму товара
   bot.action(/^pay_fiat_(\d+)_(\d+)$/, async (ctx) => {
     const user = await getUser(ctx);
     if (!user) return ctx.answerCbQuery('Нажмите /start');
@@ -283,7 +410,7 @@ function setupBotHandlers(bot, siteUrl) {
         if (result.requisite.number) text += `📱 <code>${result.requisite.number}</code>\n`;
         if (result.requisite.holder) text += `👤 ${result.requisite.holder}\n`;
       }
-      text += '\nПосле оплаты пополните баланс и купите товар, или баланс пополнится автоматически.';
+      text += '\nПосле оплаты баланс пополнится автоматически.';
 
       const btns = result.paymentUrl ? [[Markup.button.url('🔗 Оплатить', result.paymentUrl)]] : [];
       await ctx.reply(text, { parse_mode: 'HTML', ...Markup.inlineKeyboard(btns) });
@@ -293,7 +420,6 @@ function setupBotHandlers(bot, siteUrl) {
     ctx.answerCbQuery();
   });
 
-  // Пополнение (вызывается из профиля)
   bot.action('deposit_menu', async (ctx) => {
     await ctx.reply('Выберите сумму:', Markup.inlineKeyboard([
       [Markup.button.callback('500 ₽', 'dep_500'), Markup.button.callback('1000 ₽', 'dep_1000')],
@@ -326,7 +452,6 @@ function setupBotHandlers(bot, siteUrl) {
     ctx.answerCbQuery();
   });
 
-  // Заказы
   bot.hears('📦 Мои заказы', async (ctx) => {
     const user = await getUser(ctx);
     if (!user) return ctx.reply('/start');
@@ -338,10 +463,8 @@ function setupBotHandlers(bot, siteUrl) {
     ctx.reply(text, { parse_mode: 'HTML' });
   });
 
-  // Поддержка
   bot.hears('💬 Поддержка', (ctx) => ctx.reply('Напишите сообщение — оно уйдёт в поддержку.'));
 
-  // Профиль
   bot.hears('👤 Профиль', async (ctx) => {
     const user = await getUser(ctx);
     if (!user) return ctx.reply('/start');
@@ -356,14 +479,5 @@ function setupBotHandlers(bot, siteUrl) {
     });
   });
 
-  // Любой текст → поддержка
-  bot.on('text', async (ctx) => {
-    if (ctx.message.text.startsWith('/')) return;
-    if (['🛍', '📦', '💬', '👤'].some(e => ctx.message.text.startsWith(e))) return;
-    const user = await getUser(ctx);
-    if (!user) return;
-    await ChatMessage.create({ userId: user.id, message: ctx.message.text, isFromOperator: false });
-    ctx.reply('💬 Отправлено в поддержку.');
-    notifyAdmins(`💬 <b>${user.username}</b>: ${ctx.message.text}`);
-  });
+  setupSupportTextHandler(bot, ['🛍', '📦', '💬', '👤']);
 }

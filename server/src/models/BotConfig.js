@@ -19,6 +19,15 @@ const BotConfig = sequelize.define('BotConfig', {
     type: DataTypes.STRING(100),
     allowNull: true,
   },
+  types: {
+    type: DataTypes.ARRAY(DataTypes.STRING(50)),
+    defaultValue: ['shop'],
+    allowNull: false,
+  },
+  ownerTelegramId: {
+    type: DataTypes.BIGINT,
+    allowNull: true,
+  },
   isActive: {
     type: DataTypes.BOOLEAN,
     defaultValue: false,
