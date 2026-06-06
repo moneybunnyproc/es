@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import api from '../../api/axios';
 import { inputCls, labelCls, getInitials, avatarColor } from '../../components/common/index.jsx';
@@ -79,7 +80,7 @@ export default function AdminUsersPage() {
                       <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${avatarColor(u.username)}`}>
                         {getInitials(u.username)}
                       </div>
-                      <span className="text-on-surface font-medium">{u.username}</span>
+                      <Link to={`/admin/users/${u.id}`} className="text-on-surface font-medium hover:text-primary transition-colors">{u.username}</Link>
                     </div>
                   </td>
                   <td className="px-6 py-3">

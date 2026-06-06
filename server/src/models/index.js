@@ -29,7 +29,11 @@ ProductImage.belongsTo(Product, { foreignKey: 'productId' });
 
 // Product -> Items (digital goods stock)
 Product.hasMany(ProductItem, { foreignKey: 'productId', as: 'items' });
-ProductItem.belongsTo(Product, { foreignKey: 'productId' });
+ProductItem.belongsTo(Product, { foreignKey: 'productId', as: 'product' });
+
+// Order -> ProductItems (delivered items)
+Order.hasMany(ProductItem, { foreignKey: 'orderId', as: 'deliveredItems' });
+ProductItem.belongsTo(Order, { foreignKey: 'orderId' });
 
 // User -> Orders
 User.hasMany(Order, { foreignKey: 'userId', as: 'orders' });
@@ -49,7 +53,7 @@ ChatMessage.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 
 // User -> Balance Transactions
 User.hasMany(BalanceTransaction, { foreignKey: 'userId', as: 'transactions' });
-BalanceTransaction.belongsTo(User, { foreignKey: 'userId' });
+BalanceTransaction.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 
 // PromoCode -> Orders
 Order.belongsTo(PromoCode, { foreignKey: 'promoCodeId', as: 'promoCode' });

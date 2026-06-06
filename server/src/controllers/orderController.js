@@ -1,4 +1,4 @@
-import { Order, Product, PromoCode } from '../models/index.js';
+import { Order, Product, ProductItem, PromoCode } from '../models/index.js';
 import { purchaseFromBalance } from '../services/purchaseService.js';
 
 export const createOrder = async (req, res) => {
@@ -42,7 +42,10 @@ export const getOrder = async (req, res) => {
   try {
     const order = await Order.findOne({
       where: { id: req.params.id, userId: req.user.id },
-      include: [{ model: Product, as: 'product' }],
+      include: [
+        { model: Product, as: 'product' },
+        { model: ProductItem, as: 'deliveredItems', attributes: ['id', 'content', 'imageUrl'] },
+      ],
     });
     if (!order) return res.status(404).json({ error: 'Заказ не найден' });
     res.json(order);

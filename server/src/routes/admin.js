@@ -3,18 +3,20 @@ import { authenticate, requireRole } from '../middleware/auth.js';
 import { upload } from '../middleware/upload.js';
 import {
   getDashboard,
-  getUsers, updateUser, addUserBalance,
+  getUsers, getUserDetail, updateUser, addUserBalance,
   adminGetShops, createShop, updateShop, deleteShop,
   adminGetCategories, createCategory, updateCategory, deleteCategory,
   adminGetProducts, createProduct, updateProduct, deleteProduct,
   addProductImage, deleteProductImage,
   getProductItems, addProductItems, deleteProductItem, uploadItemImage,
+  getWarehouseStock, getWarehouseItems, clearProductStock,
   adminGetOrders, updateOrderStatus,
   getPromoCodes, createPromoCode, updatePromoCode, deletePromoCode,
   adminGetReviews, toggleReviewVisibility, deleteReview,
   getSettings, updateSettings,
+  getTransactions,
 } from '../controllers/adminController.js';
-import { getChats, getChatMessages, operatorReply } from '../controllers/chatController.js';
+import { getChats, getChatMessages, getChatUserInfo, operatorReply } from '../controllers/chatController.js';
 import {
   adminGetPaymentSystems, createPaymentSystem, updatePaymentSystem, deletePaymentSystem,
   getPaymentCallbacks, adminGetDeposits,
@@ -32,6 +34,7 @@ router.get('/dashboard', getDashboard);
 
 // Users
 router.get('/users', getUsers);
+router.get('/users/:id', getUserDetail);
 router.put('/users/:id', requireRole('admin'), updateUser);
 router.post('/users/:id/balance', requireRole('admin'), addUserBalance);
 
@@ -59,6 +62,12 @@ router.post('/products/:id/items', requireRole('admin'), addProductItems);
 router.post('/products/:id/items/upload-image', requireRole('admin'), upload.single('image'), uploadItemImage);
 router.delete('/products/:id/items/:itemId', requireRole('admin'), deleteProductItem);
 
+// Warehouse
+router.get('/warehouse', getWarehouseStock);
+router.get('/warehouse/items', getWarehouseItems);
+router.delete('/warehouse/products/:id/items', requireRole('admin'), clearProductStock);
+router.delete('/warehouse/items/:itemId', requireRole('admin'), deleteProductItem);
+
 // Orders
 router.get('/orders', adminGetOrders);
 router.put('/orders/:id/status', requireRole('admin'), updateOrderStatus);
@@ -77,6 +86,7 @@ router.delete('/reviews/:id', requireRole('admin'), deleteReview);
 // Chat
 router.get('/chats', getChats);
 router.get('/chats/:userId', getChatMessages);
+router.get('/chats/:userId/info', getChatUserInfo);
 router.post('/chats/:userId/reply', operatorReply);
 
 // Payment Systems
@@ -95,6 +105,9 @@ router.put('/bots/:id', requireRole('admin'), updateBot);
 router.delete('/bots/:id', requireRole('admin'), deleteBot);
 router.post('/bots/:id/start', requireRole('admin'), startBotAction);
 router.post('/bots/:id/stop', requireRole('admin'), stopBotAction);
+
+// Transactions
+router.get('/transactions', getTransactions);
 
 // Settings
 router.get('/settings', getSettings);

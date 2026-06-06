@@ -55,6 +55,18 @@ const User = sequelize.define('User', {
     type: DataTypes.BOOLEAN,
     defaultValue: false,
   },
+  adminNote: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+  },
+  walletBtc: {
+    type: DataTypes.STRING(100),
+    allowNull: true,
+  },
+  walletUsdt: {
+    type: DataTypes.STRING(100),
+    allowNull: true,
+  },
 }, {
   tableName: 'users',
   timestamps: true,

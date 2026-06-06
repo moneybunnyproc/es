@@ -11,6 +11,13 @@ export const orderStatusMap = {
   refunded: { label: 'Возврат', badge: 'badge-danger' },
 };
 
+export const transactionTypeMap = {
+  deposit: { label: 'Пополнение', badge: 'badge-success' },
+  purchase: { label: 'Покупка', badge: 'badge-primary' },
+  refund: { label: 'Возврат', badge: 'badge-warning' },
+  admin: { label: 'Админ', badge: 'badge-danger' },
+};
+
 export const depositStatusMap = {
   pending: { label: 'Ожидает', badge: 'badge-warning' },
   paid: { label: 'Оплачен', badge: 'badge-success' },
@@ -58,6 +65,16 @@ export function StarDisplay({ rating, size = 'text-base', interactive = false, o
           star
         </span>
       ))}
+    </div>
+  );
+}
+
+// Info row (key-value pair)
+export function InfoRow({ label, value, highlight }) {
+  return (
+    <div className="flex justify-between">
+      <span className="text-on-surface-variant">{label}</span>
+      <span className={highlight ? 'text-primary-action font-medium' : 'text-on-surface'}>{value}</span>
     </div>
   );
 }

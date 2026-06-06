@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import api from '../../api/axios';
 import { inputCls, labelCls } from '../../components/common/index.jsx';
+import StockItemRows, { validateRows } from '../../components/common/StockItemRows.jsx';
 
 export default function AdminProductEditPage() {
   const { id } = useParams();
@@ -12,6 +13,7 @@ export default function AdminProductEditPage() {
   const [categories, setCategories] = useState([]);
   const [stockTab, setStockTab] = useState('multiple'); // 'multiple' | 'dump'
   const [rows, setRows] = useState([{ content: '', imageUrl: '' }]);
+  const [addingRows, setAddingRows] = useState(false);
   const [form, setForm] = useState({});
 
   const loadProduct = () => {
@@ -71,6 +73,25 @@ export default function AdminProductEditPage() {
       loadProduct();
     } catch {
       toast.error('Ошибка');
+    }
+  };
+
+  const handleAddRows = async () => {
+    const error = validateRows(rows);
+    if (error) return toast.error(error);
+    const validRows = rows.filter(r => r.content.trim() || r.imageUrl);
+    setAddingRows(true);
+    try {
+      const { data } = await api.post(`/admin/products/${id}/items`, {
+        items: validRows.map(r => ({ content: r.content.trim(), imageUrl: r.imageUrl || null })),
+      });
+      toast.success(`Добавлено: ${data.count} шт`);
+      setRows([{ content: '', imageUrl: '' }]);
+      loadProduct();
+    } catch {
+      toast.error('Ошибка добавления');
+    } finally {
+      setAddingRows(false);
     }
   };
 
@@ -202,110 +223,13 @@ export default function AdminProductEditPage() {
 
             {/* Tab: Добавить несколько */}
             {stockTab === 'multiple' && (
-              <div className="space-y-4">
-                {rows.map((row, idx) => (
-                  <div key={idx} className="flex gap-4 items-start">
-                    <div className="flex-1">
-                      <label className={labelCls}>Содержимое</label>
-                      <textarea
-                        className={inputCls}
-                        rows={3}
-                        value={row.content}
-                        onChange={(e) => {
-                          const updated = [...rows];
-                          updated[idx] = { ...updated[idx], content: e.target.value };
-                          setRows(updated);
-                        }}
-                        placeholder="Данные товара (аккаунт, ключ, ссылка...)"
-                      />
-                    </div>
-                    <div className="w-28 shrink-0">
-                      <label className={labelCls}>Фото</label>
-                      {row.imageUrl ? (
-                        <div className="relative w-28 h-24">
-                          <img src={row.imageUrl} alt="" className="w-full h-full object-cover rounded-lg border border-outline/20" />
-                          <button
-                            className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-error text-white flex items-center justify-center shadow"
-                            onClick={() => {
-                              const updated = [...rows];
-                              updated[idx] = { ...updated[idx], imageUrl: '' };
-                              setRows(updated);
-                            }}
-                          >
-                            <span className="material-symbols-outlined text-[12px]">close</span>
-                          </button>
-                        </div>
-                      ) : (
-                        <label className="w-28 h-24 flex flex-col items-center justify-center rounded-lg border border-dashed border-outline/30 cursor-pointer hover:border-primary/50 transition-colors">
-                          <span className="material-symbols-outlined text-outline text-2xl">download</span>
-                          <input
-                            type="file"
-                            accept="image/*"
-                            hidden
-                            onChange={async (e) => {
-                              const file = e.target.files?.[0];
-                              if (!file) return;
-                              const fd = new FormData();
-                              fd.append('image', file);
-                              try {
-                                const { data } = await api.post(`/admin/products/${id}/items/upload-image`, fd, {
-                                  headers: { 'Content-Type': 'multipart/form-data' },
-                                });
-                                const updated = [...rows];
-                                updated[idx] = { ...updated[idx], imageUrl: data.url };
-                                setRows(updated);
-                              } catch {
-                                toast.error('Ошибка загрузки фото');
-                              }
-                              e.target.value = '';
-                            }}
-                          />
-                        </label>
-                      )}
-                    </div>
-                    {rows.length > 1 && (
-                      <button
-                        className="mt-6 w-7 h-7 rounded-full bg-error/10 text-error flex items-center justify-center hover:bg-error/20 transition-colors shrink-0"
-                        onClick={() => setRows(rows.filter((_, i) => i !== idx))}
-                      >
-                        <span className="material-symbols-outlined text-[14px]">close</span>
-                      </button>
-                    )}
-                  </div>
-                ))}
-
-                <div className="flex justify-center">
-                  <button
-                    className="btn-ghost px-6 py-2 rounded-lg text-sm"
-                    onClick={() => setRows([...rows, { content: '', imageUrl: '' }])}
-                  >
-                    Добавить ещё
-                  </button>
-                </div>
-
-                <div className="border-t border-outline/20 pt-4">
-                  <button
-                    className="btn-primary px-6 py-2.5 rounded-lg text-sm flex items-center gap-2"
-                    onClick={async () => {
-                      const validRows = rows.filter(r => r.content.trim());
-                      if (!validRows.length) return toast.error('Заполните хотя бы одну позицию');
-                      try {
-                        const { data } = await api.post(`/admin/products/${id}/items`, {
-                          items: validRows.map(r => ({ content: r.content.trim(), imageUrl: r.imageUrl || null })),
-                        });
-                        toast.success(`Добавлено: ${data.count} шт`);
-                        setRows([{ content: '', imageUrl: '' }]);
-                        loadProduct();
-                      } catch {
-                        toast.error('Ошибка добавления');
-                      }
-                    }}
-                  >
-                    <span className="material-symbols-outlined text-[18px]">check</span>
-                    Подтвердить
-                  </button>
-                </div>
-              </div>
+              <StockItemRows
+                productId={id}
+                rows={rows}
+                setRows={setRows}
+                adding={addingRows}
+                onSubmit={handleAddRows}
+              />
             )}
 
             {/* Tab: Загрузить дамп */}

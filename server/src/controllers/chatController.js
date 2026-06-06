@@ -1,4 +1,4 @@
-import { ChatMessage, User } from '../models/index.js';
+import { ChatMessage, User, Order, Product } from '../models/index.js';
 import { notifyUser } from '../bot/index.js';
 
 export const getMyMessages = async (req, res) => {
@@ -122,6 +122,30 @@ export const getChatMessages = async (req, res) => {
     res.json(messages);
   } catch (err) {
     res.status(500).json({ error: 'Ошибка загрузки сообщений' });
+  }
+};
+
+export const getChatUserInfo = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const user = await User.findByPk(userId, {
+      attributes: ['id', 'username', 'email', 'balance', 'personalDiscount', 'role', 'isBanned', 'createdAt'],
+    });
+    if (!user) return res.status(404).json({ error: 'Пользователь не найден' });
+
+    const orders = await Order.findAll({
+      where: { userId },
+      include: [{ model: Product, as: 'product', attributes: ['id', 'name'] }],
+      order: [['createdAt', 'DESC']],
+      limit: 10,
+    });
+
+    const totalOrders = await Order.count({ where: { userId } });
+    const totalSpent = await Order.sum('totalPrice', { where: { userId, status: 'delivered' } }) || 0;
+
+    res.json({ user, orders, totalOrders, totalSpent });
+  } catch (err) {
+    res.status(500).json({ error: 'Ошибка загрузки информации' });
   }
 };
 

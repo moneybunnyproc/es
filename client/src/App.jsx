@@ -27,6 +27,9 @@ import AdminChatsPage from './pages/admin/AdminChatsPage';
 import AdminSettingsPage from './pages/admin/AdminSettingsPage';
 import AdminPaymentsPage from './pages/admin/AdminPaymentsPage';
 import AdminBotsPage from './pages/admin/AdminBotsPage';
+import AdminWarehousePage from './pages/admin/AdminWarehousePage';
+import AdminTransactionsPage from './pages/admin/AdminTransactionsPage';
+import AdminUserDetailPage from './pages/admin/AdminUserDetailPage';
 import DepositPage from './pages/client/DepositPage';
 function ProtectedRoute({ children, roles }) {
   const { user, loading } = useAuthStore();
@@ -63,15 +66,18 @@ function App() {
         <Route path="/admin" element={<ProtectedRoute roles={['admin', 'operator']}><AdminLayout /></ProtectedRoute>}>
           <Route index element={<DashboardPage />} />
           <Route path="users" element={<AdminUsersPage />} />
+          <Route path="users/:id" element={<AdminUserDetailPage />} />
           <Route path="shops" element={<AdminShopsPage />} />
           <Route path="categories" element={<AdminCategoriesPage />} />
           <Route path="products" element={<AdminProductsPage />} />
           <Route path="products/:id" element={<AdminProductEditPage />} />
+          <Route path="warehouse" element={<AdminWarehousePage />} />
           <Route path="orders" element={<AdminOrdersPage />} />
           <Route path="promo-codes" element={<AdminPromoCodesPage />} />
           <Route path="reviews" element={<AdminReviewsPage />} />
           <Route path="chats" element={<AdminChatsPage />} />
           <Route path="payments" element={<AdminPaymentsPage />} />
+          <Route path="transactions" element={<AdminTransactionsPage />} />
           <Route path="bots" element={<AdminBotsPage />} />
           <Route path="settings" element={<AdminSettingsPage />} />
         </Route>

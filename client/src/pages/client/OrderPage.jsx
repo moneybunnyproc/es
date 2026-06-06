@@ -67,15 +67,36 @@ export default function OrderPage() {
         <Row label="Дата">{new Date(order.createdAt).toLocaleString('ru')}</Row>
       </div>
 
-      {order.deliveredContent && (
-        <div className="bg-surface border border-outline-variant/20 rounded-lg p-5 space-y-3">
+      {(order.deliveredItems?.length > 0 || order.deliveredContent) && (
+        <div className="bg-surface border border-outline-variant/20 rounded-lg p-5 space-y-4">
           <div className="flex items-center gap-2">
             <span className="material-symbols-outlined text-secondary">check_circle</span>
             <h3 className="font-semibold text-on-surface">Полученные данные</h3>
           </div>
-          <pre className="whitespace-pre-wrap break-all text-sm text-secondary font-mono leading-relaxed">
-            {order.deliveredContent}
-          </pre>
+          {order.deliveredItems?.length > 0 ? (
+            <div className="space-y-3">
+              {order.deliveredItems.map((item, idx) => (
+                <div key={item.id} className={`${idx > 0 ? 'border-t border-outline-variant/10 pt-3' : ''}`}>
+                  {item.imageUrl && (
+                    <img
+                      src={item.imageUrl}
+                      alt=""
+                      className="w-full max-w-sm rounded-lg border border-outline-variant/20 mb-2"
+                    />
+                  )}
+                  {item.content && (
+                    <pre className="whitespace-pre-wrap break-all text-sm text-secondary font-mono leading-relaxed">
+                      {item.content}
+                    </pre>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <pre className="whitespace-pre-wrap break-all text-sm text-secondary font-mono leading-relaxed">
+              {order.deliveredContent}
+            </pre>
+          )}
         </div>
       )}
     </div>

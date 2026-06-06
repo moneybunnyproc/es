@@ -73,6 +73,15 @@ export default function AdminPaymentsPage() {
     load();
   };
 
+  const handleInlinePriority = async (psId, value) => {
+    try {
+      await api.put(`/admin/payment-systems/${psId}`, { priority: parseInt(value) || 0 });
+      load();
+    } catch {
+      toast.error('Ошибка обновления приоритета');
+    }
+  };
+
   const handleChannelToggle = (ch) => {
     const has = form.channels.includes(ch);
     setForm({
@@ -117,36 +126,51 @@ export default function AdminPaymentsPage() {
 
       {/* Tab: Systems */}
       {tab === 'systems' && (
-        <div className="space-y-4">
-          {systems.map((ps) => (
-            <div key={ps.id} className="glass-card-static p-5 flex items-center justify-between">
-              <div className="space-y-1">
-                <div className="flex items-center gap-3">
-                  <span className="font-bold text-on-surface text-lg">{ps.name}</span>
-                  <span className="badge badge-primary font-mono">{ps.code}</span>
-                  <span className={`badge ${ps.isActive ? 'badge-success' : 'badge-danger'}`}>
-                    {ps.isActive ? 'Активна' : 'Неактивна'}
-                  </span>
-                </div>
-                <p className="text-xs text-on-surface-variant">
-                  Приоритет: {ps.priority} | Каналы: {ps.channels?.join(', ')} | Колбэков: {ps.callbackCount}
-                </p>
-                <p className="text-xs text-outline truncate max-w-md">{ps.baseUrl}</p>
-              </div>
-              <div className="flex gap-2">
-                <button className="btn-ghost px-3 py-1 text-xs rounded-lg" onClick={() => {
-                  setSelectedSystem(ps.id);
-                  setTab('callbacks');
-                }}>
-                  Колбэки
-                </button>
-                <button className="btn-ghost px-3 py-1 text-xs rounded-lg" onClick={() => openEdit(ps)}>Ред.</button>
-                <button className="text-xs px-3 py-1 rounded-lg bg-error/10 text-error hover:bg-error/20 transition-colors" onClick={() => handleDelete(ps.id)}>
-                  Удалить
-                </button>
-              </div>
-            </div>
-          ))}
+        <div className="glass-card-static overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-outline/10">
+                  {['ID', 'Название', 'Код', 'Каналы', 'Приоритет', 'Статус', 'Действия'].map(h => (
+                    <th key={h} className="px-5 py-3 text-left text-xs uppercase tracking-widest text-outline font-medium">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {systems.map(ps => (
+                  <tr key={ps.id} className="border-b border-outline/5 hover:bg-surface-container/40 transition-colors">
+                    <td className="px-5 py-3 text-on-surface-variant">{ps.id}</td>
+                    <td className="px-5 py-3 text-on-surface font-medium">{ps.name}</td>
+                    <td className="px-5 py-3"><span className="badge badge-primary font-mono">{ps.code}</span></td>
+                    <td className="px-5 py-3 text-on-surface-variant text-xs max-w-[250px] truncate">{ps.channels?.join(', ')}</td>
+                    <td className="px-5 py-3">
+                      <input
+                        type="number"
+                        className="w-16 bg-surface-container border border-outline/30 rounded-lg px-2 py-1 text-sm text-on-surface text-center focus:outline-none focus:border-primary transition-colors"
+                        defaultValue={ps.priority}
+                        onBlur={(e) => {
+                          const val = parseInt(e.target.value) || 0;
+                          if (val !== ps.priority) handleInlinePriority(ps.id, val);
+                        }}
+                        onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+                      />
+                    </td>
+                    <td className="px-5 py-3">
+                      <span className={`badge ${ps.isActive ? 'badge-success' : 'badge-danger'}`}>
+                        {ps.isActive ? 'Активна' : 'Откл'}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3">
+                      <div className="flex gap-2">
+                        <button className="btn-ghost px-3 py-1 text-xs rounded-lg" onClick={() => openEdit(ps)}>Ред.</button>
+                        <button className="text-xs px-3 py-1 rounded-lg bg-error/10 text-error hover:bg-error/20 transition-colors" onClick={() => handleDelete(ps.id)}>Удалить</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           {systems.length === 0 && (
             <p className="text-center text-on-surface-variant py-10">Нет платёжных систем. Добавьте первую.</p>
           )}

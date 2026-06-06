@@ -52,16 +52,49 @@ export const getUsers = async (req, res) => {
   }
 };
 
+export const getUserDetail = async (req, res) => {
+  try {
+    const user = await User.findByPk(req.params.id);
+    if (!user) return res.status(404).json({ error: 'Пользователь не найден' });
+
+    const [orders, transactions, reviews] = await Promise.all([
+      Order.findAll({
+        where: { userId: user.id },
+        include: [{ model: Product, as: 'product', attributes: ['id', 'name'] }],
+        order: [['createdAt', 'DESC']],
+      }),
+      BalanceTransaction.findAll({
+        where: { userId: user.id },
+        order: [['createdAt', 'DESC']],
+      }),
+      Review.findAll({
+        where: { userId: user.id },
+        include: [{ model: Product, as: 'product', attributes: ['id', 'name'] }],
+        order: [['createdAt', 'DESC']],
+      }),
+    ]);
+
+    const totalSpent = await Order.sum('totalPrice', { where: { userId: user.id, status: 'delivered' } }) || 0;
+
+    res.json({ user, orders, transactions, reviews, totalSpent });
+  } catch (err) {
+    res.status(500).json({ error: 'Ошибка загрузки пользователя' });
+  }
+};
+
 export const updateUser = async (req, res) => {
   try {
     const user = await User.findByPk(req.params.id);
     if (!user) return res.status(404).json({ error: 'Пользователь не найден' });
 
-    const { role, balance, personalDiscount, isBanned } = req.body;
+    const { role, balance, personalDiscount, isBanned, adminNote, walletBtc, walletUsdt } = req.body;
     if (role !== undefined) user.role = role;
     if (balance !== undefined) user.balance = balance;
     if (personalDiscount !== undefined) user.personalDiscount = personalDiscount;
     if (isBanned !== undefined) user.isBanned = isBanned;
+    if (adminNote !== undefined) user.adminNote = adminNote;
+    if (walletBtc !== undefined) user.walletBtc = walletBtc;
+    if (walletUsdt !== undefined) user.walletUsdt = walletUsdt;
 
     await user.save();
     res.json(user);
@@ -173,6 +206,13 @@ export const deleteCategory = async (req, res) => {
   }
 };
 
+// Shared stock count attributes
+const stockCountAttrs = [
+  [sequelize.literal(`(SELECT COUNT(*) FROM product_items WHERE product_items."productId" = "Product"."id" AND product_items."isSold" = false)`), 'stockCount'],
+  [sequelize.literal(`(SELECT COUNT(*) FROM product_items WHERE product_items."productId" = "Product"."id" AND product_items."isSold" = true)`), 'soldCount'],
+  [sequelize.literal(`(SELECT COUNT(*) FROM product_items WHERE product_items."productId" = "Product"."id")`), 'totalItems'],
+];
+
 // Products management
 export const adminGetProducts = async (req, res) => {
   try {
@@ -187,12 +227,7 @@ export const adminGetProducts = async (req, res) => {
       order: [['createdAt', 'DESC']],
       limit,
       offset: (page - 1) * limit,
-      attributes: {
-        include: [
-          [sequelize.literal(`(SELECT COUNT(*) FROM product_items WHERE product_items."productId" = "Product"."id" AND product_items."isSold" = false)`), 'stockCount'],
-          [sequelize.literal(`(SELECT COUNT(*) FROM product_items WHERE product_items."productId" = "Product"."id")`), 'totalItems'],
-        ],
-      },
+      attributes: { include: stockCountAttrs },
     });
 
     res.json({ products: rows, total: count, page, pages: Math.ceil(count / limit) });
@@ -311,6 +346,67 @@ export const deleteProductItem = async (req, res) => {
     res.json({ message: 'Элемент удалён' });
   } catch (err) {
     res.status(500).json({ error: 'Ошибка удаления элемента' });
+  }
+};
+
+// Warehouse — all positions list with filters
+export const getWarehouseItems = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const { productId, status, search } = req.query;
+
+    const where = {};
+    if (productId) where.productId = productId;
+    if (status === 'available') where.isSold = false;
+    else if (status === 'sold') where.isSold = true;
+    if (search) where.content = { [Op.iLike]: `%${search}%` };
+
+    const { count, rows } = await ProductItem.findAndCountAll({
+      where,
+      include: [
+        { model: Product, as: 'product', attributes: ['id', 'name'], include: [
+          { model: Category, as: 'category', attributes: ['id', 'name'], include: [
+            { model: Shop, as: 'shop', attributes: ['id', 'name'] },
+          ]},
+        ]},
+      ],
+      order: [['createdAt', 'DESC']],
+      limit,
+      offset: (page - 1) * limit,
+    });
+
+    res.json({ items: rows, total: count, page, pages: Math.ceil(count / limit) });
+  } catch (err) {
+    res.status(500).json({ error: 'Ошибка загрузки позиций' });
+  }
+};
+
+// Warehouse — stock overview across all products
+export const getWarehouseStock = async (req, res) => {
+  try {
+    const products = await Product.findAll({
+      include: [
+        { model: Category, as: 'category', include: [{ model: Shop, as: 'shop' }] },
+      ],
+      attributes: { include: stockCountAttrs },
+      order: [['name', 'ASC']],
+    });
+    res.json(products);
+  } catch (err) {
+    res.status(500).json({ error: 'Ошибка загрузки склада' });
+  }
+};
+
+// Warehouse — bulk delete unsold items for a product
+export const clearProductStock = async (req, res) => {
+  try {
+    const deleted = await ProductItem.destroy({
+      where: { productId: req.params.id, isSold: false },
+    });
+    res.json({ deleted });
+  } catch (err) {
+    res.status(500).json({ error: 'Ошибка очистки склада' });
   }
 };
 
@@ -466,5 +562,30 @@ export const updateSettings = async (req, res) => {
     res.json({ message: 'Настройки обновлены' });
   } catch (err) {
     res.status(500).json({ error: 'Ошибка обновления настроек' });
+  }
+};
+
+// Transactions
+export const getTransactions = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const { userId, type } = req.query;
+
+    const where = {};
+    if (userId) where.userId = userId;
+    if (type) where.type = type;
+
+    const { count, rows } = await BalanceTransaction.findAndCountAll({
+      where,
+      include: [{ model: User, as: 'user', attributes: ['id', 'username'] }],
+      order: [['createdAt', 'DESC']],
+      limit,
+      offset: (page - 1) * limit,
+    });
+
+    res.json({ transactions: rows, total: count, page, pages: Math.ceil(count / limit) });
+  } catch (err) {
+    res.status(500).json({ error: 'Ошибка загрузки транзакций' });
   }
 };
