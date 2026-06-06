@@ -8,13 +8,13 @@ export default function AdminBotsPage() {
   const [modal, setModal] = useState(null);
   const [showToken, setShowToken] = useState({});
   const [fullTokens, setFullTokens] = useState({});
-  const [form, setForm] = useState({ name: '', token: '', welcomeMessage: '' });
+  const [form, setForm] = useState({ name: '', token: '', welcomeMessage: '', types: ['shop'] });
 
   const load = () => api.get('/admin/bots').then(({ data }) => setBots(data));
   useEffect(() => { load(); }, []);
 
   const openCreate = () => {
-    setForm({ name: '', token: '', welcomeMessage: '' });
+    setForm({ name: '', token: '', welcomeMessage: '', types: ['shop'] });
     setModal({ mode: 'create' });
   };
 
@@ -22,7 +22,7 @@ export default function AdminBotsPage() {
     // Fetch full token
     try {
       const { data } = await api.get(`/admin/bots/${bot.id}`);
-      setForm({ name: data.name, token: data.token, welcomeMessage: data.welcomeMessage || '' });
+      setForm({ name: data.name, token: data.token, welcomeMessage: data.welcomeMessage || '', types: data.types || ['shop'] });
       setModal({ mode: 'edit', bot: data });
     } catch {
       toast.error('Ошибка загрузки');
@@ -88,6 +88,12 @@ export default function AdminBotsPage() {
     setShowToken({ ...showToken, [botId]: true });
   };
 
+  const typeLabel = (types) => {
+    if (!types?.length) return 'Магазин';
+    const labels = { shop: 'Магазин', redirector: 'Переходник', client: 'Клиентский' };
+    return types.map(t => labels[t] || t).join(', ');
+  };
+
   const statusColor = (s) => {
     if (s === 'running') return 'badge-success';
     if (s === 'error') return 'badge-danger';
@@ -130,6 +136,7 @@ export default function AdminBotsPage() {
                     <span className="font-bold text-on-surface">{bot.name}</span>
                     {bot.username && <span className="text-primary text-sm">@{bot.username}</span>}
                     <span className={`badge ${statusColor(bot.status)}`}>{statusLabel(bot.status)}</span>
+                    <span className="badge badge-info">{typeLabel(bot.types)}</span>
                   </div>
                   <p className="text-xs text-on-surface-variant mt-0.5">
                     ID: {bot.id} • Создан: {new Date(bot.createdAt).toLocaleDateString('ru')}
@@ -204,6 +211,18 @@ export default function AdminBotsPage() {
               <div>
                 <label className={labelCls}>Название</label>
                 <input className={inputCls} value={form.name} onChange={e => setForm({...form, name: e.target.value})} required placeholder="ExShop Bot" />
+              </div>
+              <div>
+                <label className={labelCls}>Тип бота</label>
+                <select
+                  className={inputCls}
+                  value={form.types[0] || 'shop'}
+                  onChange={e => setForm({...form, types: [e.target.value]})}
+                >
+                  <option value="shop">Магазин</option>
+                  <option value="redirector">Переходник</option>
+                  <option value="client">Клиентский</option>
+                </select>
               </div>
               <div>
                 <label className={labelCls}>Токен (от @BotFather)</label>
