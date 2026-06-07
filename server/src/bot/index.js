@@ -1,10 +1,18 @@
 import crypto from 'crypto';
 import { Telegraf, Markup } from 'telegraf';
-import { User, Shop, Category, Product, ProductItem, Order, ChatMessage, BotConfig } from '../models/index.js';
+import { User, Shop, Category, Product, ProductItem, Order, ChatMessage, BotConfig, PaymentSystem } from '../models/index.js';
 import sequelize from '../config/database.js';
 import { purchaseFromBalance } from '../services/purchaseService.js';
 import { createDepositOrder } from '../services/depositService.js';
 import { getAvailableCryptoChannels, createCryptoDeposit } from '../services/cryptoService.js';
+
+const CHANNEL_LABELS = {
+  card: '💳 Банковская карта', sbp: '📱 СБП', qr: '📷 QR-код',
+  sim: '📞 SIM / телефон', cash: '💵 Наличные', transgran: '🌍 Трансграничный',
+  alfa2alfa: '🏦 Альфа-Банк', tbank2tbank: '🏦 Т-Банк',
+  sber2sber: '🏦 Сбербанк', vtb2vtb: '🏦 ВТБ',
+};
+const CRYPTO_LABELS = { btc: 'Bitcoin (BTC)', ltc: 'Litecoin (LTC)', usdt: 'USDT (TRC-20)' };
 
 // Map of active bots: botConfigId -> { bot, config }
 const activeBots = new Map();
@@ -432,8 +440,54 @@ function setupShopHandlers(bot, siteUrl) {
     const user = await getUser(ctx);
     if (!user) return ctx.answerCbQuery('/start');
     const amount = parseInt(ctx.match[1]);
+
     try {
-      const result = await createDepositOrder({ userId: user.id, amount, httpFallbackUrl: siteUrl });
+      const [systems, cryptoChannels] = await Promise.all([
+        PaymentSystem.findAll({ where: { isActive: true }, order: [['priority', 'ASC']] }),
+        getAvailableCryptoChannels(),
+      ]);
+
+      const btns = [];
+
+      // Fiat payment channels (deduplicate)
+      const seenChannels = new Set();
+      for (const ps of systems) {
+        for (const ch of (ps.channels || [])) {
+          if (!seenChannels.has(ch)) {
+            seenChannels.add(ch);
+            btns.push([Markup.button.callback(CHANNEL_LABELS[ch] || ch, `depf_${amount}_${ch}`)]);
+          }
+        }
+      }
+
+      // Crypto channels
+      for (const cc of cryptoChannels) {
+        const icon = { btc: '₿', ltc: '🪙', usdt: '💲' }[cc.currency] || '🪙';
+        btns.push([Markup.button.callback(`${icon} ${CRYPTO_LABELS[cc.currency] || cc.label}`, `depc_${amount}_${cc.currency}`)]);
+      }
+
+      if (!btns.length) {
+        await ctx.reply('❌ Нет доступных способов оплаты');
+      } else {
+        await ctx.reply(`Сумма: <b>${amount} ₽</b>\nВыберите способ оплаты:`, {
+          parse_mode: 'HTML',
+          ...Markup.inlineKeyboard(btns),
+        });
+      }
+    } catch (err) {
+      ctx.reply(`❌ ${err.message}`);
+    }
+    ctx.answerCbQuery();
+  });
+
+  // Fiat deposit via payment system
+  bot.action(/^depf_(\d+)_(.+)$/, async (ctx) => {
+    const user = await getUser(ctx);
+    if (!user) return ctx.answerCbQuery('/start');
+    const amount = parseInt(ctx.match[1]);
+    const channel = ctx.match[2];
+    try {
+      const result = await createDepositOrder({ userId: user.id, amount, channel, httpFallbackUrl: siteUrl });
 
       let text = `💳 Пополнение <b>${amount} ₽</b>\n\n`;
       if (result.requisite) {
@@ -446,6 +500,29 @@ function setupShopHandlers(bot, siteUrl) {
 
       const btns = result.paymentUrl ? [[Markup.button.url('🔗 Оплатить', result.paymentUrl)]] : [];
       await ctx.reply(text, { parse_mode: 'HTML', ...Markup.inlineKeyboard(btns) });
+    } catch (err) {
+      ctx.reply(`❌ ${err.message}`);
+    }
+    ctx.answerCbQuery();
+  });
+
+  // Crypto deposit
+  bot.action(/^depc_(\d+)_(.+)$/, async (ctx) => {
+    const user = await getUser(ctx);
+    if (!user) return ctx.answerCbQuery('/start');
+    const amount = parseInt(ctx.match[1]);
+    const currency = ctx.match[2];
+    try {
+      const { deposit, rate } = await createCryptoDeposit({ userId: user.id, currency, amountRub: amount });
+
+      let text = `🪙 <b>${CRYPTO_LABELS[currency] || currency.toUpperCase()}</b>\n\n`;
+      text += `💰 Сумма: <b>${amount} ₽</b>\n`;
+      text += `📊 Курс: 1 ${currency.toUpperCase()} = ${rate.toLocaleString('ru')} ₽\n`;
+      text += `\n💎 К оплате: <b>${deposit.amountCrypto} ${currency.toUpperCase()}</b>\n\n`;
+      text += `📋 Кошелёк:\n<code>${deposit.walletAddress}</code>\n\n`;
+      text += `⏱ Депозит действителен 1 час.\nПосле отправки баланс пополнится автоматически.`;
+
+      await ctx.reply(text, { parse_mode: 'HTML' });
     } catch (err) {
       ctx.reply(`❌ ${err.message}`);
     }
