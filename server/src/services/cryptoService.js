@@ -4,14 +4,36 @@ import { notifyUser } from '../bot/index.js';
 
 // --- Rate fetching ---
 
+async function fetchHtxUsdtRub() {
+  const url = 'https://www.htx.com/-/x/otc/v1/data/trade-market?coinId=2&currency=11&tradeType=sell&currPage=1&payMethod=29,28&acceptOrder=0&blockType=general&online=1&range=0&amount=70000&isThumbsUp=false&isMerchant=false&isTraded=false&onlyTradable=false&isFollowed=false';
+  const res = await fetch(url, {
+    headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0', 'client-type': 'web' },
+  });
+  const data = await res.json();
+  const offers = data.data || [];
+  const prices = offers.slice(0, 10).map(o => parseFloat(o.price)).filter(p => p > 0);
+  if (!prices.length) throw new Error('HTX P2P: no offers');
+  return prices.reduce((a, b) => a + b, 0) / prices.length;
+}
+
 export async function getCryptoRates() {
   try {
-    const res = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,litecoin,tether&vs_currencies=rub');
-    const data = await res.json();
+    const [htxRes, usdtRub] = await Promise.all([
+      fetch('https://api.huobi.pro/market/tickers'),
+      fetchHtxUsdtRub(),
+    ]);
+    const htxData = await htxRes.json();
+
+    let btcUsdt = 0, ltcUsdt = 0;
+    for (const t of htxData.data) {
+      if (t.symbol === 'btcusdt') btcUsdt = t.close;
+      else if (t.symbol === 'ltcusdt') ltcUsdt = t.close;
+    }
+
     return {
-      btc: data.bitcoin?.rub || 0,
-      ltc: data.litecoin?.rub || 0,
-      usdt: data.tether?.rub || 0,
+      btc: btcUsdt * usdtRub,
+      ltc: ltcUsdt * usdtRub,
+      usdt: usdtRub,
     };
   } catch {
     return { btc: 0, ltc: 0, usdt: 0 };
