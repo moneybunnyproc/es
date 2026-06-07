@@ -5,8 +5,10 @@ import useAuthStore from '../../store/authStore';
 import { depositStatusMap } from '../../components/common/index.jsx';
 
 const channelLabels = {
-  card: 'Банковская карта',
+  card: 'Карта',
+  card_with_pdf: 'Карта (PDF)',
   sbp: 'СБП',
+  sbp_with_pdf: 'СБП (PDF)',
   qr: 'QR-код',
   sim: 'SIM / телефон',
   cash: 'Наличные',

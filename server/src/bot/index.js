@@ -7,8 +7,10 @@ import { createDepositOrder } from '../services/depositService.js';
 import { getAvailableCryptoChannels, createCryptoDeposit } from '../services/cryptoService.js';
 
 const CHANNEL_LABELS = {
-  card: '💳 Банковская карта', sbp: '📱 СБП', qr: '📷 QR-код',
-  sim: '📞 SIM / телефон', cash: '💵 Наличные', transgran: '🌍 Трансграничный',
+  card: '💳 Карта', card_with_pdf: '💳 Карта (PDF)',
+  sbp: '📱 СБП', sbp_with_pdf: '📱 СБП (PDF)',
+  qr: '📷 QR-код', sim: '📞 SIM / телефон', cash: '💵 Наличные',
+  transgran: '🌍 Трансграничный',
   alfa2alfa: '🏦 Альфа-Банк', tbank2tbank: '🏦 Т-Банк',
   sber2sber: '🏦 Сбербанк', vtb2vtb: '🏦 ВТБ',
 };
