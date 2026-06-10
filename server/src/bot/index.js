@@ -19,6 +19,9 @@ const CRYPTO_LABELS = { btc: 'Bitcoin (BTC)', ltc: 'Litecoin (LTC)', usdt: 'USDT
 // Map of active bots: botConfigId -> { bot, config }
 const activeBots = new Map();
 
+// Users awaiting custom deposit amount input: telegramId -> true
+const awaitingDepositAmount = new Set();
+
 export function getBot() {
   const first = activeBots.values().next().value;
   return first?.bot || null;
@@ -137,11 +140,62 @@ async function ensureUser(ctx) {
   return user;
 }
 
+async function showDepositPaymentMethods(ctx, amount) {
+  try {
+    const [systems, cryptoChannels] = await Promise.all([
+      PaymentSystem.findAll({ where: { isActive: true }, order: [['priority', 'ASC']] }),
+      getAvailableCryptoChannels(),
+    ]);
+
+    const btns = [];
+
+    const seenChannels = new Set();
+    for (const ps of systems) {
+      for (const ch of (ps.channels || [])) {
+        if (!seenChannels.has(ch)) {
+          seenChannels.add(ch);
+          btns.push([Markup.button.callback(CHANNEL_LABELS[ch] || ch, `depf_${amount}_${ch}`)]);
+        }
+      }
+    }
+
+    for (const cc of cryptoChannels) {
+      const icon = { btc: '₿', ltc: '🪙', usdt: '💲' }[cc.currency] || '🪙';
+      btns.push([Markup.button.callback(`${icon} ${CRYPTO_LABELS[cc.currency] || cc.label}`, `depc_${amount}_${cc.currency}`)]);
+    }
+
+    if (!btns.length) {
+      await ctx.reply('❌ Нет доступных способов оплаты');
+    } else {
+      await ctx.reply(`Сумма: <b>${amount} ₽</b>\nВыберите способ оплаты:`, {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard(btns),
+      });
+    }
+  } catch (err) {
+    ctx.reply(`❌ ${err.message}`);
+  }
+}
+
 // ===== Shared: text -> support =====
 function setupSupportTextHandler(bot, menuEmojis) {
   bot.on('text', async (ctx) => {
     if (ctx.message.text.startsWith('/')) return;
-    if (menuEmojis.some(e => ctx.message.text.startsWith(e))) return;
+    if (menuEmojis.some(e => ctx.message.text.startsWith(e))) {
+      awaitingDepositAmount.delete(ctx.from.id);
+      return;
+    }
+
+    // Handle custom deposit amount input
+    if (awaitingDepositAmount.has(ctx.from.id)) {
+      const amount = parseInt(ctx.message.text);
+      if (!amount || amount < 100 || amount > 100000) {
+        return ctx.reply('❌ Введите сумму от 100 до 100 000 ₽\nПопробуйте ещё раз:');
+      }
+      awaitingDepositAmount.delete(ctx.from.id);
+      return showDepositPaymentMethods(ctx, amount);
+    }
+
     const user = await getUser(ctx);
     if (!user) return;
     await ChatMessage.create({ userId: user.id, message: ctx.message.text, isFromOperator: false });
@@ -431,7 +485,8 @@ function setupShopHandlers(bot, siteUrl) {
   });
 
   bot.action('deposit_menu', async (ctx) => {
-    await ctx.reply('Выберите сумму:', Markup.inlineKeyboard([
+    awaitingDepositAmount.add(ctx.from.id);
+    await ctx.reply('Выберите сумму или введите свою:', Markup.inlineKeyboard([
       [Markup.button.callback('500 ₽', 'dep_500'), Markup.button.callback('1000 ₽', 'dep_1000')],
       [Markup.button.callback('2000 ₽', 'dep_2000'), Markup.button.callback('5000 ₽', 'dep_5000')],
     ]));
@@ -439,46 +494,8 @@ function setupShopHandlers(bot, siteUrl) {
   });
 
   bot.action(/^dep_(\d+)$/, async (ctx) => {
-    const user = await getUser(ctx);
-    if (!user) return ctx.answerCbQuery('/start');
-    const amount = parseInt(ctx.match[1]);
-
-    try {
-      const [systems, cryptoChannels] = await Promise.all([
-        PaymentSystem.findAll({ where: { isActive: true }, order: [['priority', 'ASC']] }),
-        getAvailableCryptoChannels(),
-      ]);
-
-      const btns = [];
-
-      // Fiat payment channels (deduplicate)
-      const seenChannels = new Set();
-      for (const ps of systems) {
-        for (const ch of (ps.channels || [])) {
-          if (!seenChannels.has(ch)) {
-            seenChannels.add(ch);
-            btns.push([Markup.button.callback(CHANNEL_LABELS[ch] || ch, `depf_${amount}_${ch}`)]);
-          }
-        }
-      }
-
-      // Crypto channels
-      for (const cc of cryptoChannels) {
-        const icon = { btc: '₿', ltc: '🪙', usdt: '💲' }[cc.currency] || '🪙';
-        btns.push([Markup.button.callback(`${icon} ${CRYPTO_LABELS[cc.currency] || cc.label}`, `depc_${amount}_${cc.currency}`)]);
-      }
-
-      if (!btns.length) {
-        await ctx.reply('❌ Нет доступных способов оплаты');
-      } else {
-        await ctx.reply(`Сумма: <b>${amount} ₽</b>\nВыберите способ оплаты:`, {
-          parse_mode: 'HTML',
-          ...Markup.inlineKeyboard(btns),
-        });
-      }
-    } catch (err) {
-      ctx.reply(`❌ ${err.message}`);
-    }
+    awaitingDepositAmount.delete(ctx.from.id);
+    await showDepositPaymentMethods(ctx, parseInt(ctx.match[1]));
     ctx.answerCbQuery();
   });
 
