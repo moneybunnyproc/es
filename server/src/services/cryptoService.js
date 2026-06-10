@@ -75,11 +75,24 @@ export async function createCryptoDeposit({ userId, currency, amountRub }) {
   const rate = rates[currency];
   if (!rate) throw Object.assign(new Error(`Не удалось получить курс ${currency.toUpperCase()}`), { status: 500 });
 
-  // Calculate crypto amount with small random offset to make amount unique (for tx matching)
+  // Calculate unique crypto amount for exact tx matching on shared wallet
   const baseAmount = amountRub / rate;
-  const offset = Math.floor(Math.random() * 900 + 100); // 100-999
   const decimals = currency === 'usdt' ? 2 : 8;
-  const amountCrypto = parseFloat((baseAmount + offset / Math.pow(10, decimals + 3)).toFixed(decimals));
+
+  const activeAmounts = new Set(
+    (await CryptoDeposit.findAll({
+      where: { currency, status: ['pending', 'confirming'] },
+      attributes: ['amountCrypto'],
+    })).map(d => d.amountCrypto.toString())
+  );
+
+  let amountCrypto;
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const offset = (Math.floor(Math.random() * 9000) + 1000) / Math.pow(10, decimals);
+    const candidate = parseFloat((baseAmount + offset).toFixed(decimals));
+    if (!activeAmounts.has(candidate.toString())) { amountCrypto = candidate; break; }
+  }
+  if (!amountCrypto) throw Object.assign(new Error('Не удалось сформировать уникальную сумму. Попробуйте позже.'), { status: 409 });
 
   const deposit = await CryptoDeposit.create({
     userId,
@@ -99,8 +112,7 @@ export async function createCryptoDeposit({ userId, currency, amountRub }) {
 
 function findMatchingTx(txs, amountCrypto) {
   const target = parseFloat(amountCrypto);
-  const tolerance = target * 0.01;
-  return txs.find(tx => Math.abs(tx.amount - target) <= tolerance);
+  return txs.find(tx => tx.amount === target);
 }
 
 // --- Blockchain checkers ---
@@ -169,6 +181,12 @@ export async function pollCryptoDeposits() {
     where: { status: ['pending', 'confirming'] },
   });
 
+  // Collect txHashes already used by paid deposits to prevent double-crediting
+  const usedHashes = new Set(
+    (await CryptoDeposit.findAll({ where: { status: 'paid' }, attributes: ['txHash'] }))
+      .map(d => d.txHash).filter(Boolean)
+  );
+
   for (const deposit of pending) {
     // Check expiry
     if (new Date() > new Date(deposit.expiresAt) && deposit.status === 'pending') {
@@ -184,13 +202,14 @@ export async function pollCryptoDeposits() {
       const txs = await checker(deposit.walletAddress);
       const match = findMatchingTx(txs, deposit.amountCrypto);
 
-      if (!match) continue;
+      if (!match || usedHashes.has(match.txHash)) continue;
 
       deposit.txHash = match.txHash;
       deposit.confirmations = match.confirmations;
 
       if (match.confirmations >= deposit.requiredConfirmations) {
         await creditCryptoDeposit(deposit);
+        usedHashes.add(match.txHash);
       } else {
         deposit.status = 'confirming';
         await deposit.save();
@@ -207,10 +226,19 @@ async function creditCryptoDeposit(deposit) {
     const fresh = await CryptoDeposit.findByPk(deposit.id, { lock: true, transaction: t });
     if (fresh.status === 'paid') { await t.rollback(); return; }
 
+    // Prevent same tx from being credited to multiple deposits
+    if (fresh.txHash) {
+      const existing = await CryptoDeposit.findOne({
+        where: { txHash: fresh.txHash, status: 'paid' },
+        transaction: t,
+      });
+      if (existing) { await t.rollback(); return; }
+    }
+
     fresh.status = 'paid';
     await fresh.save({ transaction: t });
 
-    const user = await User.findByPk(fresh.userId, { transaction: t });
+    const user = await User.findByPk(fresh.userId, { lock: true, transaction: t });
     await user.increment('balance', { by: parseFloat(fresh.amountRub), transaction: t });
 
     await BalanceTransaction.create({
@@ -222,8 +250,8 @@ async function creditCryptoDeposit(deposit) {
 
     await t.commit();
 
-    const newBalance = parseFloat(user.balance) + parseFloat(fresh.amountRub);
-    notifyUser(fresh.userId, `✅ Крипто-депозит подтверждён!\n${fresh.amountCrypto} ${fresh.currency.toUpperCase()} → ${fresh.amountRub} ₽\nБаланс: ${newBalance.toFixed(2)} ₽`);
+    await user.reload();
+    notifyUser(fresh.userId, `✅ Крипто-депозит подтверждён!\n${fresh.amountCrypto} ${fresh.currency.toUpperCase()} → ${fresh.amountRub} ₽\nБаланс: ${parseFloat(user.balance).toFixed(2)} ₽`);
   } catch {
     await t.rollback();
   }
@@ -252,6 +280,98 @@ export async function checkSingleCryptoDeposit(depositId) {
       await deposit.save();
     }
   }
+
+  return deposit;
+}
+
+// --- Fetch single tx by hash from blockchain ---
+
+async function fetchTxByHash(currency, txHash, walletAddress) {
+  if (currency === 'btc') {
+    const [txRes, tipHeight] = await Promise.all([
+      fetch(`https://blockstream.info/api/tx/${txHash}`),
+      getBtcTipHeight(),
+    ]);
+    if (!txRes.ok) return null;
+    const tx = await txRes.json();
+    const output = tx.vout.find(v => v.scriptpubkey_address === walletAddress);
+    const confs = tx.status?.confirmed && tx.status.block_height && tipHeight
+      ? tipHeight - tx.status.block_height + 1 : 0;
+    return {
+      amount: output ? output.value / 1e8 : 0,
+      confirmations: confs,
+      timestamp: tx.status?.block_time ? new Date(tx.status.block_time * 1000) : null,
+    };
+  }
+
+  if (currency === 'ltc') {
+    const res = await fetch(`https://api.blockcypher.com/v1/ltc/main/txs/${txHash}`);
+    if (!res.ok) return null;
+    const tx = await res.json();
+    const output = tx.outputs?.find(o => o.addresses?.includes(walletAddress));
+    return {
+      amount: output ? output.value / 1e8 : 0,
+      confirmations: tx.confirmations || 0,
+      timestamp: tx.confirmed ? new Date(tx.confirmed) : null,
+    };
+  }
+
+  if (currency === 'usdt') {
+    const res = await fetch(`https://apilist.tronscanapi.com/api/transaction-info?hash=${txHash}`);
+    if (!res.ok) return null;
+    const tx = await res.json();
+    const isToWallet = tx.toAddress === walletAddress || tx.transfersAllList?.some(t => t.toAddress === walletAddress);
+    const transfer = tx.transfersAllList?.find(t => t.toAddress === walletAddress);
+    return {
+      amount: transfer ? parseInt(transfer.amount_str || '0') / 1e6 : 0,
+      confirmations: tx.confirmed ? 20 : 0,
+      timestamp: tx.timestamp ? new Date(tx.timestamp) : null,
+    };
+  }
+
+  return null;
+}
+
+// --- Admin: resolve deposit by tx hash ---
+
+export async function adminResolveCryptoDeposit(depositId, txHash) {
+  const deposit = await CryptoDeposit.findByPk(depositId);
+  if (!deposit) throw Object.assign(new Error('Депозит не найден'), { status: 404 });
+  if (deposit.status === 'paid') throw Object.assign(new Error('Депозит уже зачислен'), { status: 400 });
+
+  // Check tx hash not already used
+  const existing = await CryptoDeposit.findOne({ where: { txHash, status: 'paid' } });
+  if (existing) throw Object.assign(new Error('Этот txHash уже использован в другом депозите'), { status: 400 });
+
+  // Fetch tx from blockchain
+  const txInfo = await fetchTxByHash(deposit.currency, txHash, deposit.walletAddress);
+  if (!txInfo) throw Object.assign(new Error('Транзакция не найдена в блокчейне'), { status: 400 });
+  if (!txInfo.amount) throw Object.assign(new Error('В транзакции нет перевода на указанный кошелёк'), { status: 400 });
+
+  // Verify timing: tx should be within reasonable window of deposit creation (±2 hours)
+  if (txInfo.timestamp) {
+    const depositTime = new Date(deposit.createdAt).getTime();
+    const txTime = txInfo.timestamp.getTime();
+    const diffHours = Math.abs(txTime - depositTime) / (1000 * 60 * 60);
+    if (diffHours > 1) throw Object.assign(new Error(`Время транзакции не совпадает (разница ${diffHours.toFixed(1)}ч)`), { status: 400 });
+  }
+
+  // Calculate actual RUB amount based on current rate
+  const rates = await getCryptoRates();
+  const rate = rates[deposit.currency];
+  if (!rate) throw Object.assign(new Error('Не удалось получить курс'), { status: 500 });
+
+  const actualAmountRub = Math.round(txInfo.amount * rate);
+
+  // Update deposit with tx data and credit
+  deposit.txHash = txHash;
+  deposit.amountCrypto = txInfo.amount;
+  deposit.amountRub = actualAmountRub;
+  deposit.confirmations = txInfo.confirmations;
+  await deposit.save();
+
+  await creditCryptoDeposit(deposit);
+  await deposit.reload();
 
   return deposit;
 }

@@ -1,6 +1,6 @@
 import { PaymentSystem, PaymentCallback, DepositOrder, CryptoDeposit, User } from '../models/index.js';
 import { createDepositOrder, creditDeposit, pollDepositStatus } from '../services/depositService.js';
-import { getAvailableCryptoChannels, createCryptoDeposit, checkSingleCryptoDeposit } from '../services/cryptoService.js';
+import { getAvailableCryptoChannels, createCryptoDeposit, checkSingleCryptoDeposit, adminResolveCryptoDeposit } from '../services/cryptoService.js';
 
 // ===== CLIENT: Create deposit =====
 export const createDeposit = async (req, res) => {
@@ -257,5 +257,29 @@ export const adminGetDeposits = async (req, res) => {
     res.json(deposits);
   } catch (err) {
     res.status(500).json({ error: 'Ошибка загрузки депозитов' });
+  }
+};
+
+export const adminGetCryptoDeposits = async (req, res) => {
+  try {
+    const deposits = await CryptoDeposit.findAll({
+      include: [{ model: User, as: 'user', attributes: ['id', 'username'] }],
+      order: [['createdAt', 'DESC']],
+      limit: 100,
+    });
+    res.json(deposits);
+  } catch (err) {
+    res.status(500).json({ error: 'Ошибка загрузки крипто-депозитов' });
+  }
+};
+
+export const adminResolveCryptoDepositAction = async (req, res) => {
+  try {
+    const { txHash } = req.body;
+    if (!txHash) return res.status(400).json({ error: 'Укажите txHash' });
+    const deposit = await adminResolveCryptoDeposit(req.params.id, txHash.trim());
+    res.json(deposit);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
   }
 };

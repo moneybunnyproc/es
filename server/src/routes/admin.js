@@ -19,7 +19,7 @@ import {
 import { getChats, getChatMessages, getChatUserInfo, getUnreadCount, operatorReply } from '../controllers/chatController.js';
 import {
   adminGetPaymentSystems, createPaymentSystem, updatePaymentSystem, deletePaymentSystem,
-  getPaymentCallbacks, adminGetDeposits,
+  getPaymentCallbacks, adminGetDeposits, adminGetCryptoDeposits, adminResolveCryptoDepositAction,
 } from '../controllers/paymentController.js';
 import {
   getBots, getBotFull, createBot, updateBot, deleteBot, startBotAction, stopBotAction,
@@ -97,6 +97,8 @@ router.put('/payment-systems/:id', requireRole('admin'), updatePaymentSystem);
 router.delete('/payment-systems/:id', requireRole('admin'), deletePaymentSystem);
 router.get('/payment-callbacks', getPaymentCallbacks);
 router.get('/deposits', adminGetDeposits);
+router.get('/crypto-deposits', adminGetCryptoDeposits);
+router.post('/crypto-deposits/:id/resolve', requireRole('admin'), adminResolveCryptoDepositAction);
 
 // Bots
 router.get('/bots', getBots);

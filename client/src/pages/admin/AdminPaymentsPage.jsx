@@ -13,7 +13,10 @@ export default function AdminPaymentsPage() {
   const [systems, setSystems] = useState([]);
   const [callbacks, setCallbacks] = useState([]);
   const [deposits, setDeposits] = useState([]);
-  const [tab, setTab] = useState('systems'); // systems | callbacks | deposits
+  const [cryptoDeposits, setCryptoDeposits] = useState([]);
+  const [tab, setTab] = useState('systems');
+  const [resolvingId, setResolvingId] = useState(null);
+  const [resolveHash, setResolveHash] = useState('');
   const [modal, setModal] = useState(null);
   const [selectedSystem, setSelectedSystem] = useState(null);
   const [form, setForm] = useState({
@@ -26,6 +29,7 @@ export default function AdminPaymentsPage() {
     api.get('/admin/payment-systems').then(({ data }) => setSystems(data));
     api.get('/admin/payment-callbacks').then(({ data }) => setCallbacks(data));
     api.get('/admin/deposits').then(({ data }) => setDeposits(data));
+    api.get('/admin/crypto-deposits').then(({ data }) => setCryptoDeposits(data));
   };
   useEffect(() => { load(); }, []);
 
@@ -91,8 +95,21 @@ export default function AdminPaymentsPage() {
   };
 
   const statusBadge = (s) => {
-    const map = { paid: 'badge-success', pending: 'badge-warning', cancelled: 'badge-danger', expired: 'badge-danger' };
+    const map = { paid: 'badge-success', pending: 'badge-warning', confirming: 'badge-info', cancelled: 'badge-danger', expired: 'badge-danger' };
     return map[s] || 'badge-primary';
+  };
+
+  const handleResolve = async (id) => {
+    if (!resolveHash.trim()) return toast.error('Введите txHash');
+    try {
+      await api.post(`/admin/crypto-deposits/${id}/resolve`, { txHash: resolveHash.trim() });
+      toast.success('Депозит зачислен');
+      setResolvingId(null);
+      setResolveHash('');
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Ошибка');
+    }
   };
 
   return (
@@ -111,6 +128,7 @@ export default function AdminPaymentsPage() {
           { key: 'systems', label: 'Платёжные системы' },
           { key: 'callbacks', label: `Колбэки (${callbacks.length})` },
           { key: 'deposits', label: `Депозиты (${deposits.length})` },
+          { key: 'crypto', label: `Крипто (${cryptoDeposits.length})` },
         ].map(t => (
           <button
             key={t.key}
@@ -244,6 +262,62 @@ export default function AdminPaymentsPage() {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {/* Tab: Crypto Deposits */}
+      {tab === 'crypto' && (
+        <div className="glass-card-static overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-outline/10">
+                  {['ID', 'Пользователь', 'Валюта', 'Сумма крипто', 'Сумма ₽', 'TxHash', 'Статус', 'Дата', ''].map(h => (
+                    <th key={h} className="px-5 py-3 text-left text-xs uppercase tracking-widest text-outline font-medium">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {cryptoDeposits.map(d => (
+                  <tr key={d.id} className="border-b border-outline/5 hover:bg-surface-container/40 transition-colors">
+                    <td className="px-5 py-3 text-on-surface-variant">{d.id}</td>
+                    <td className="px-5 py-3 text-on-surface">{d.user?.username}</td>
+                    <td className="px-5 py-3"><span className="badge badge-primary">{d.currency?.toUpperCase()}</span></td>
+                    <td className="px-5 py-3 font-mono text-on-surface">{d.amountCrypto}</td>
+                    <td className="px-5 py-3 font-bold text-on-surface">{d.amountRub} ₽</td>
+                    <td className="px-5 py-3 font-mono text-xs text-on-surface-variant max-w-[200px] truncate">{d.txHash || '—'}</td>
+                    <td className="px-5 py-3"><span className={`badge ${statusBadge(d.status)}`}>{d.status}</span></td>
+                    <td className="px-5 py-3 text-on-surface-variant">{new Date(d.createdAt).toLocaleString('ru')}</td>
+                    <td className="px-5 py-3">
+                      {d.status !== 'paid' && d.status !== 'expired' && (
+                        resolvingId === d.id ? (
+                          <div className="flex gap-1 items-center">
+                            <input
+                              className={`${inputCls} !py-1 !text-xs w-48`}
+                              placeholder="txHash..."
+                              value={resolveHash}
+                              onChange={e => setResolveHash(e.target.value)}
+                              onKeyDown={e => { if (e.key === 'Enter') handleResolve(d.id); }}
+                              autoFocus
+                            />
+                            <button className="btn-primary px-2 py-1 text-xs rounded-lg" onClick={() => handleResolve(d.id)}>OK</button>
+                            <button className="btn-ghost px-2 py-1 text-xs rounded-lg" onClick={() => { setResolvingId(null); setResolveHash(''); }}>×</button>
+                          </div>
+                        ) : (
+                          <button className="btn-ghost px-3 py-1 text-xs rounded-lg" onClick={() => { setResolvingId(d.id); setResolveHash(''); }}>
+                            Ввести txHash
+                          </button>
+                        )
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {cryptoDeposits.length === 0 && (
+            <p className="text-center text-on-surface-variant py-10">Нет крипто-депозитов</p>
+          )}
         </div>
       )}
 
