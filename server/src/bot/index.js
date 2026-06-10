@@ -548,15 +548,79 @@ function setupShopHandlers(bot, siteUrl) {
     ctx.answerCbQuery();
   });
 
+  const ORDERS_PER_PAGE = 5;
+  const statusEmoji = { delivered: '✅', pending: '⏳', paid: '💰', cancelled: '❌', refunded: '↩️' };
+
+  async function showOrdersPage(ctx, userId, page = 0) {
+    const total = await Order.count({ where: { userId } });
+    if (!total) return ctx.reply('📦 Нет заказов');
+    const totalPages = Math.ceil(total / ORDERS_PER_PAGE);
+    if (page >= totalPages) page = totalPages - 1;
+
+    const orders = await Order.findAll({
+      where: { userId },
+      include: [{ model: Product, as: 'product', attributes: ['name'] }],
+      order: [['createdAt', 'DESC']],
+      offset: page * ORDERS_PER_PAGE,
+      limit: ORDERS_PER_PAGE,
+    });
+
+    const btns = orders.map(o => {
+      const name = (o.product?.name || '').slice(0, 30);
+      return [Markup.button.callback(
+        `${statusEmoji[o.status] || '•'} #${o.id} ${name} — ${o.totalPrice} ₽`,
+        `order_${o.id}`
+      )];
+    });
+
+    const nav = [];
+    if (page > 0) nav.push(Markup.button.callback('⬅️', `orders_p${page - 1}`));
+    nav.push(Markup.button.callback(`${page + 1}/${totalPages}`, 'noop'));
+    if (page < totalPages - 1) nav.push(Markup.button.callback('➡️', `orders_p${page + 1}`));
+    if (nav.length > 1) btns.push(nav);
+
+    const method = ctx.callbackQuery ? 'editMessageText' : 'reply';
+    await ctx[method]('📦 <b>Мои заказы:</b>', {
+      parse_mode: 'HTML',
+      ...Markup.inlineKeyboard(btns),
+    });
+  }
+
   bot.hears('📦 Мои заказы', async (ctx) => {
     const user = await getUser(ctx);
     if (!user) return ctx.reply('/start');
-    const orders = await Order.findAll({ where: { userId: user.id }, include: [{ model: Product, as: 'product', attributes: ['name'] }], order: [['createdAt', 'DESC']], limit: 10 });
-    if (!orders.length) return ctx.reply('📦 Нет заказов');
-    const emoji = { delivered: '✅', pending: '⏳', cancelled: '❌', refunded: '↩️' };
-    let text = '📦 <b>Заказы:</b>\n\n';
-    orders.forEach(o => { text += `${emoji[o.status] || '•'} #${o.id} ${o.product?.name} — ${o.totalPrice} ₽\n`; });
-    ctx.reply(text, { parse_mode: 'HTML' });
+    await showOrdersPage(ctx, user.id, 0);
+  });
+
+  bot.action(/^orders_p(\d+)$/, async (ctx) => {
+    const user = await getUser(ctx);
+    if (!user) return ctx.answerCbQuery('/start');
+    await showOrdersPage(ctx, user.id, parseInt(ctx.match[1]));
+    ctx.answerCbQuery();
+  });
+
+  bot.action('noop', (ctx) => ctx.answerCbQuery());
+
+  bot.action(/^order_(\d+)$/, async (ctx) => {
+    const user = await getUser(ctx);
+    if (!user) return ctx.answerCbQuery('/start');
+    const order = await Order.findOne({
+      where: { id: ctx.match[1], userId: user.id },
+      include: [{ model: Product, as: 'product', attributes: ['name'] }],
+    });
+    if (!order) return ctx.answerCbQuery('Заказ не найден');
+
+    let text = `📦 <b>Заказ #${order.id}</b>\n\n`;
+    text += `🛍 ${order.product?.name}\n`;
+    text += `💰 ${order.totalPrice} ₽`;
+    if (parseFloat(order.discount) > 0) text += ` (скидка ${order.discount} ₽)`;
+    text += `\n📊 Кол-во: ${order.quantity}\n`;
+    text += `${statusEmoji[order.status] || '•'} Статус: ${order.status}\n`;
+    text += `📅 ${new Date(order.createdAt).toLocaleString('ru')}\n`;
+    if (order.deliveredContent) text += `\n📋 <b>Данные:</b>\n<code>${order.deliveredContent}</code>`;
+
+    await ctx.reply(text, { parse_mode: 'HTML' });
+    ctx.answerCbQuery();
   });
 
   bot.hears('💬 Поддержка', (ctx) => ctx.reply('Напишите сообщение — оно уйдёт в поддержку.'));
