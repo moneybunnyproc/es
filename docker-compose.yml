@@ -51,18 +51,6 @@ services:
       - server
     restart: unless-stopped
 
-  ngrok:
-    image: ngrok/ngrok:alpine
-    container_name: ex-shop-ngrok
-    environment:
-      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN:-356xwDV11OWRrDqaIE7AcUKaWWe_7KJrqZA4ZPZkaXPDYRiSH}
-    command: http server:4000 --log stdout
-    ports:
-      - "4040:4040"
-    depends_on:
-      - server
-    restart: unless-stopped
-
 volumes:
   pgdata:
   uploads:

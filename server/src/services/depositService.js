@@ -24,18 +24,17 @@ async function callApi(ps, method, path, body = null) {
 }
 
 /**
- * Resolve webhook base URL (env > ngrok > fallback).
+ * Resolve webhook base URL (env > fallback).
  */
-async function getWebhookBaseUrl(fallback) {
-  if (process.env.WEBHOOK_BASE_URL) return process.env.WEBHOOK_BASE_URL;
-  for (const host of ['ngrok:4040', 'localhost:4040']) {
-    try {
-      const r = await fetch(`http://${host}/api/tunnels`);
-      const d = await r.json();
-      if (d.tunnels?.[0]?.public_url) return d.tunnels[0].public_url;
-    } catch {}
-  }
-  return fallback || 'http://localhost:4000';
+function getWebhookBaseUrl(fallback) {
+  return process.env.WEBHOOK_BASE_URL || fallback || 'http://localhost:4000';
+}
+
+/**
+ * Unwrap an order payload from a payment system response envelope.
+ */
+function unwrapOrder(data) {
+  return data.order || data;
 }
 
 /**
@@ -46,8 +45,10 @@ export async function createDepositOrder({ userId, amount, channel, httpFallback
   const systems = await PaymentSystem.findAll({ where: { isActive: true }, order: [['priority', 'ASC']] });
   if (!systems.length) throw new Error('Нет доступных платёжных систем');
 
-  const baseUrl = await getWebhookBaseUrl(httpFallbackUrl);
+  const baseUrl = getWebhookBaseUrl(httpFallbackUrl);
   let lastError = null;
+
+  const parsedAmount = parseFloat(amount);
 
   for (const ps of systems) {
     try {
@@ -56,20 +57,20 @@ export async function createDepositOrder({ userId, amount, channel, httpFallback
 
       const apiResponse = await callApi(ps, 'POST', '/orders', {
         direction: 'inbound',
-        amount: parseFloat(amount),
+        amount: parsedAmount,
         currency: 'RUB',
         reference,
         channel: selectedChannel,
         webhook_url: `${baseUrl}/api/payments/webhook/${ps.code}`,
       });
 
-      const order = apiResponse.order || apiResponse;
+      const order = unwrapOrder(apiResponse);
       const paymentUrl = order.hosted_url || order.payment_url || apiResponse.url || null;
       const externalId = order.order_no || order.id || null;
 
       const deposit = await DepositOrder.create({
         userId, paymentSystemId: ps.id, reference,
-        externalOrderId: externalId, amount: parseFloat(amount),
+        externalOrderId: externalId, amount: parsedAmount,
         channel: selectedChannel, status: 'pending',
         paymentUrl, paymentData: apiResponse,
       });
@@ -90,6 +91,7 @@ export async function createDepositOrder({ userId, amount, channel, httpFallback
  */
 export async function creditDeposit(deposit, paymentSystemName) {
   const t = await sequelize.transaction();
+  let credited = null;
   try {
     // Re-fetch with lock to prevent race condition
     const fresh = await DepositOrder.findByPk(deposit.id, { transaction: t, lock: true });
@@ -98,33 +100,36 @@ export async function creditDeposit(deposit, paymentSystemName) {
       return false; // Already processed
     }
 
+    const user = await User.findByPk(fresh.userId, { transaction: t });
+    if (!user) {
+      await t.rollback();
+      return false;
+    }
+
+    const amount = parseFloat(fresh.amount);
     fresh.status = 'paid';
     await fresh.save({ transaction: t });
 
-    const user = await User.findByPk(fresh.userId, { transaction: t });
-    if (user) {
-      await user.increment('balance', { by: parseFloat(fresh.amount), transaction: t });
-      await user.reload({ transaction: t });
+    await user.increment('balance', { by: amount, transaction: t });
+    await user.reload({ transaction: t });
 
-      await BalanceTransaction.create({
-        userId: user.id,
-        amount: parseFloat(fresh.amount),
-        type: 'deposit',
-        description: `Пополнение через ${paymentSystemName || 'платёжку'} (${fresh.channel})`,
-      }, { transaction: t });
+    await BalanceTransaction.create({
+      userId: user.id,
+      amount,
+      type: 'deposit',
+      description: `Пополнение через ${paymentSystemName || 'платёжку'} (${fresh.channel})`,
+    }, { transaction: t });
 
-      await t.commit();
-
-      notifyUser(fresh.userId, `✅ Баланс пополнен на <b>${fresh.amount} ₽</b>\nНовый баланс: <b>${parseFloat(user.balance).toFixed(2)} ₽</b>`);
-      return true;
-    }
-
-    await t.rollback();
-    return false;
+    await t.commit();
+    credited = { userId: fresh.userId, amount, newBalance: parseFloat(user.balance) };
   } catch (err) {
     await t.rollback();
     throw err;
   }
+
+  // Side-effect outside the transaction: a notify failure must not roll back a committed credit.
+  notifyUser(credited.userId, `✅ Баланс пополнен на <b>${credited.amount} ₽</b>\nНовый баланс: <b>${credited.newBalance.toFixed(2)} ₽</b>`);
+  return true;
 }
 
 /**
@@ -134,7 +139,7 @@ export async function pollDepositStatus(deposit, paymentSystem) {
   if (!deposit.externalOrderId) return false;
   try {
     const data = await callApi(paymentSystem, 'GET', `/orders/${deposit.externalOrderId}`);
-    const order = data.order || data;
+    const order = unwrapOrder(data);
     const paidStatuses = ['paid', 'completed', 'success', 'done', 'settled'];
     return paidStatuses.includes((order.state || order.status || '').toLowerCase());
   } catch {

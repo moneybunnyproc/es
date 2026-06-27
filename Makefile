@@ -1,4 +1,4 @@
-.PHONY: up down restart logs dev dev-stop db-reset db-shell server-shell ngrok-url status clean help
+.PHONY: up down restart logs dev dev-stop db-reset db-shell server-shell status clean help
 
 # === Production (Docker) ===
 
@@ -19,9 +19,6 @@ logs-server: ## View server logs
 
 logs-client: ## View client logs
 	docker compose logs -f client
-
-logs-ngrok: ## View ngrok logs
-	docker compose logs -f ngrok
 
 # === Development (local) ===
 
@@ -60,9 +57,6 @@ db-shell: ## Open psql shell
 
 server-shell: ## Shell into server container
 	docker exec -it ex-shop-server sh
-
-ngrok-url: ## Show ngrok public URL
-	@curl -s http://localhost:4040/api/tunnels | python3 -c "import sys,json; t=json.load(sys.stdin)['tunnels']; print(t[0]['public_url'] if t else 'ngrok not running')" 2>/dev/null || echo "ngrok not running"
 
 status: ## Show running containers
 	docker compose ps
